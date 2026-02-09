@@ -1,5 +1,7 @@
-let sortStepsPerSecond = 20; // Bubble-sort steps per second (adjust this)
-let moveEase = 0.4; // Rectangle movement smoothness/speed (0.05 to 0.4)
+let sortStepsPerSecond = 80; // Bubble-sort steps per second (adjust this)
+let moveEase = 0.2; // Rectangle movement smoothness/speed (0.05 to 0.4)
+let sortingAlgorithm = "selection"; // "bubble", "selection", "insertion"
+let removeGroupSize = 3; // When N consecutive ascending IDs appear, remove them
 
 let relationshipState = null;
 
@@ -23,7 +25,16 @@ function createrelationship(
   rectHeight = 100,
   numRects = 8,
 ) {
-  let key = [cx, cy, w, rectWidth, rectHeight, numRects].join("_");
+  let key = [
+    cx,
+    cy,
+    w,
+    rectWidth,
+    rectHeight,
+    numRects,
+    sortingAlgorithm,
+    removeGroupSize,
+  ].join("_");
 
   // Rebuild state when parameters change.
   if (!relationshipState || relationshipState.key !== key) {
@@ -87,6 +98,10 @@ function makeRelationshipState(
   // Randomly shuffle rectangle sequence.
   shuffleArray(rects);
 
+  // Build swap sequence using the chosen sorting algorithm.
+  let startIds = rects.map((r) => r.id);
+  let swapPlan = buildSwapPlan(startIds, sortingAlgorithm);
+
   // Start each rectangle at its current slot.
   for (let i = 0; i < rects.length; i++) {
     rects[i].x = slots[i];
@@ -99,13 +114,17 @@ function makeRelationshipState(
     cy: cy,
     leftX: leftX,
     rightX: rightX,
+    targetLeftX: leftX,
+    targetRightX: rightX,
     dotSize: dotSize,
+    sidePadding: sidePadding,
+    gap: gap,
     rectWidth: rectWidth,
     rectHeight: rectHeight,
     slots: slots,
     rects: rects,
-    pass: 0,
-    index: 0,
+    swapPlan: swapPlan,
+    swapIndex: 0,
     done: false,
     lastStepTime: millis(),
   };
@@ -117,41 +136,42 @@ function updateRelationship(state) {
     state.rects[i].targetX = state.slots[i];
   }
 
-  // Animate movement.
+  // Animate movement for dots and rectangles.
+  state.leftX = lerp(state.leftX, state.targetLeftX, moveEase);
+  state.rightX = lerp(state.rightX, state.targetRightX, moveEase);
   for (let rectObj of state.rects) {
     rectObj.x = lerp(rectObj.x, rectObj.targetX, moveEase);
   }
 
-  if (state.done) return;
+  // Wait until everything settles before update/removal/sort step.
+  if (!allSettled(state)) return;
 
-  // Wait until rectangles settle before next bubble-sort step.
-  if (!allRectsSettled(state.rects)) return;
+  // Remove the first group of N ascending IDs, then relayout and rebuild sort.
+  if (tryRemoveAscendingGroup(state)) {
+    state.lastStepTime = millis();
+    return;
+  }
+
+  if (state.done) return;
 
   // Adjustable sorting speed.
   let stepDelayMs = 1000 / max(0.1, sortStepsPerSecond);
   if (millis() - state.lastStepTime < stepDelayMs) return;
   state.lastStepTime = millis();
 
-  let n = state.rects.length;
-  if (state.pass >= n - 1) {
+  if (state.swapIndex >= state.swapPlan.length) {
     state.done = true;
     return;
   }
 
-  let j = state.index;
-
-  // Bubble sort comparison and swap.
-  if (state.rects[j].id > state.rects[j + 1].id) {
-    let temp = state.rects[j];
-    state.rects[j] = state.rects[j + 1];
-    state.rects[j + 1] = temp;
-  }
-
-  state.index++;
-  if (state.index >= n - 1 - state.pass) {
-    state.index = 0;
-    state.pass++;
-  }
+  // Apply one swap from the precomputed plan.
+  let pair = state.swapPlan[state.swapIndex];
+  let a = pair[0];
+  let b = pair[1];
+  let temp = state.rects[a];
+  state.rects[a] = state.rects[b];
+  state.rects[b] = temp;
+  state.swapIndex++;
 }
 
 function drawRelationship(state) {
@@ -186,6 +206,12 @@ function allRectsSettled(rects) {
   return true;
 }
 
+function allSettled(state) {
+  if (abs(state.leftX - state.targetLeftX) > 0.5) return false;
+  if (abs(state.rightX - state.targetRightX) > 0.5) return false;
+  return allRectsSettled(state.rects);
+}
+
 function shuffleArray(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     let j = floor(random(i + 1));
@@ -193,4 +219,151 @@ function shuffleArray(arr) {
     arr[i] = arr[j];
     arr[j] = temp;
   }
+}
+
+function buildSwapPlan(ids, algorithm) {
+  let arr = ids.slice();
+  let swaps = [];
+
+  if (algorithm === "selection") {
+    // Selection sort: typically one swap per pass.
+    for (let i = 0; i < arr.length - 1; i++) {
+      let minIndex = i;
+      for (let j = i + 1; j < arr.length; j++) {
+        if (arr[j] < arr[minIndex]) {
+          minIndex = j;
+        }
+      }
+      if (minIndex !== i) {
+        swaps.push([i, minIndex]);
+        let temp = arr[i];
+        arr[i] = arr[minIndex];
+        arr[minIndex] = temp;
+      }
+    }
+    return swaps;
+  }
+
+  if (algorithm === "insertion") {
+    // Insertion sort: move each value left via adjacent swaps.
+    for (let i = 1; i < arr.length; i++) {
+      let j = i;
+      while (j > 0 && arr[j - 1] > arr[j]) {
+        swaps.push([j - 1, j]);
+        let temp = arr[j - 1];
+        arr[j - 1] = arr[j];
+        arr[j] = temp;
+        j--;
+      }
+    }
+    return swaps;
+  }
+
+  // Default: bubble sort.
+  for (let pass = 0; pass < arr.length - 1; pass++) {
+    for (let i = 0; i < arr.length - 1 - pass; i++) {
+      if (arr[i] > arr[i + 1]) {
+        swaps.push([i, i + 1]);
+        let temp = arr[i];
+        arr[i] = arr[i + 1];
+        arr[i + 1] = temp;
+      }
+    }
+  }
+  return swaps;
+}
+
+function tryRemoveAscendingGroup(state) {
+  let n = max(1, floor(removeGroupSize));
+  if (state.rects.length === 0) return false;
+
+  let removedSomething = false;
+
+  // If fewer than N rectangles remain, remove all of them when they are ordered.
+  if (state.rects.length < n) {
+    if (isAscendingConsecutive(state.rects)) {
+      state.rects.splice(0, state.rects.length);
+      removedSomething = true;
+    }
+  } else {
+    // Remove any existing run of N consecutive ascending IDs.
+    // Keep scanning until no such run remains.
+    let start = findAscendingRunStart(state.rects, n);
+    while (start >= 0) {
+      state.rects.splice(start, n);
+      removedSomething = true;
+      start = findAscendingRunStart(state.rects, n);
+    }
+  }
+
+  if (!removedSomething) return false;
+  relayoutRelationship(state);
+  rebuildSortForCurrentOrder(state);
+  return true;
+}
+
+function findAscendingRunStart(rects, n) {
+  let nextMap = buildNextRemainingIdMap(rects);
+  for (let i = 0; i <= rects.length - n; i++) {
+    let ok = true;
+    for (let k = 1; k < n; k++) {
+      let prevId = rects[i + k - 1].id;
+      let currId = rects[i + k].id;
+      if (nextMap[prevId] !== currId) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return i;
+  }
+  return -1;
+}
+
+function isAscendingConsecutive(rects) {
+  if (rects.length <= 1) return rects.length === 1;
+  let nextMap = buildNextRemainingIdMap(rects);
+  for (let i = 1; i < rects.length; i++) {
+    if (nextMap[rects[i - 1].id] !== rects[i].id) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function buildNextRemainingIdMap(rects) {
+  let ids = rects
+    .map((r) => r.id)
+    .slice()
+    .sort((a, b) => a - b);
+  let nextMap = {};
+  for (let i = 0; i < ids.length - 1; i++) {
+    nextMap[ids[i]] = ids[i + 1];
+  }
+  return nextMap;
+}
+
+function relayoutRelationship(state) {
+  let count = state.rects.length;
+  let usedWidth = 0;
+  if (count > 0) {
+    usedWidth = count * state.rectWidth + (count - 1) * state.gap;
+  }
+
+  let halfSpan = usedWidth / 2 + state.sidePadding + state.dotSize / 2;
+  state.targetLeftX = state.cx - halfSpan;
+  state.targetRightX = state.cx + halfSpan;
+
+  state.slots = [];
+  let startX = state.cx - usedWidth / 2;
+  for (let i = 0; i < count; i++) {
+    state.slots.push(startX + i * (state.rectWidth + state.gap));
+    state.rects[i].targetX = state.slots[i];
+  }
+}
+
+function rebuildSortForCurrentOrder(state) {
+  let ids = state.rects.map((r) => r.id);
+  state.swapPlan = buildSwapPlan(ids, sortingAlgorithm);
+  state.swapIndex = 0;
+  state.done = state.swapPlan.length === 0;
 }
