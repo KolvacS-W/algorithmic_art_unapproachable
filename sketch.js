@@ -4,6 +4,7 @@ let sortingAlgorithm = "random"; // "random", "bubble", "selection", "insertion"
 let removeGroupSize = 3; // When N consecutive ascending IDs appear, remove them
 let noiseSpeed = 0.06; // Speed of Perlin-noise size changes
 let noiseAmplitude = 0.8; // Size changes around +/-40% from average width/height
+let dotBeatAmount = 0.45; // Dot pulse strength (heartbeat feel)
 
 let relationshipState = null;
 
@@ -124,6 +125,7 @@ function makeRelationshipState(
     targetLeftX: leftX,
     targetRightX: rightX,
     dotSize: dotSize,
+    currentDotSize: dotSize,
     sidePadding: sidePadding,
     gap: gap,
     baseCount: count,
@@ -147,6 +149,8 @@ function updateRelationship(state) {
     state.rects[i].targetX = state.slots[i];
   }
 
+  let noiseSum = 0;
+
   // Animate movement for dots and rectangles.
   state.leftX = lerp(state.leftX, state.targetLeftX, moveEase);
   state.rightX = lerp(state.rightX, state.targetRightX, moveEase);
@@ -162,7 +166,16 @@ function updateRelationship(state) {
     let heightScale = max(0.1, 1 + amp * (nH * 2 - 1));
     rectObj.w = state.rectWidth * widthScale;
     rectObj.h = state.rectHeight * heightScale;
+    noiseSum += (nW + nH) * 0.5;
   }
+
+  // Heartbeat-like pulse tied to rectangle noise.
+  let avgNoise = state.rects.length > 0 ? noiseSum / state.rects.length : 0.5;
+  let beatSpeed = lerp(0.18, 0.34, avgNoise);
+  let beatPhase = frameCount * beatSpeed + avgNoise * TWO_PI * 2.0;
+  let beatShape = pow(max(0, sin(beatPhase)), 8);
+  let targetDotSize = state.dotSize * (1 + dotBeatAmount * beatShape);
+  state.currentDotSize = lerp(state.currentDotSize, targetDotSize, 0.25);
 
   // If all rectangles are gone, move dots toward merging, then respawn before full merge.
   if (state.rects.length === 0) {
@@ -219,8 +232,8 @@ function drawRelationship(state) {
   fill(105);
 
   // Dots
-  circle(state.leftX, state.cy, state.dotSize);
-  circle(state.rightX, state.cy, state.dotSize);
+  circle(state.leftX, state.cy, state.currentDotSize);
+  circle(state.rightX, state.cy, state.currentDotSize);
 
   // Rectangles
   rectMode(CORNER);
