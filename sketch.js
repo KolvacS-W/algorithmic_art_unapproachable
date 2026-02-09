@@ -6,7 +6,7 @@ let noiseSpeed = 0.06; // Speed of Perlin-noise size changes
 let noiseAmplitude = 0.8; // Size changes around +/-40% from average width/height
 let dotBeatAmount = 0.45; // Dot pulse strength (heartbeat feel)
 
-let relationshipState = null;
+let relationshipStates = {};
 
 function setup() {
   createCanvas(800, 600);
@@ -14,23 +14,78 @@ function setup() {
 
 function draw() {
   background(245);
-
-  // cx, cy, distanceBetweenDots, rectWidth, rectHeight, numRects
-  createrelationship(400, 300, 520, 12, 60, 30);
+  drawRelationshipSegments();
 }
 
-// Creates and animates a relationship of two dots and sortable rectangles.
+// Divide a square into diagonal segments and place a relationship on each segment.
+function drawRelationshipSegments() {
+  let s = min(width, height) * 0.86;
+  let e = s / 2;
+  let cx = width / 2;
+  let cy = height / 2;
+
+  function p(x, y) {
+    return { x: cx + x, y: cy + y };
+  }
+
+  // Square corners and edge midpoints.
+  let TL = p(-e, -e);
+  let TR = p(e, -e);
+  let BR = p(e, e);
+  let BL = p(-e, e);
+  let MT = p(0, -e);
+  let MR = p(e, 0);
+  let MB = p(0, e);
+  let ML = p(-e, 0);
+  let C = p(0, 0);
+
+  // Intersections between the corner diagonals and the diamond.
+  let I1 = p(-e / 2, -e / 2);
+  let I2 = p(e / 2, e / 2);
+  let I3 = p(-e / 2, e / 2);
+  let I4 = p(e / 2, -e / 2);
+
+  let segments = [
+    [TL, I1], [I1, C], [C, I2], [I2, BR], // TL -> BR diagonal split
+    [BL, I3], [I3, C], [C, I4], [I4, TR], // BL -> TR diagonal split
+    [ML, I1], [I1, MT], // diamond left-top edge split
+    [MT, I4], [I4, MR], // diamond top-right edge split
+    [MR, I2], [I2, MB], // diamond right-bottom edge split
+    [MB, I3], [I3, ML], // diamond bottom-left edge split
+  ];
+
+  for (let i = 0; i < segments.length; i++) {
+    let a = segments[i][0];
+    let b = segments[i][1];
+
+    // Small perpendicular offset so shared-node dots do not fully overlap.
+    let shifted = offsetSegment(a, b, i, 7);
+
+    // id, ax, ay, bx, by, rectWidth, rectHeight, numRects
+    createrelationship("seg_" + i, shifted.ax, shifted.ay, shifted.bx, shifted.by, 10, 36, 8);
+  }
+}
+
+// Creates and animates one relationship between dot A(ax, ay) and dot B(bx, by).
 function createrelationship(
-  cx,
-  cy,
-  w,
+  id,
+  ax,
+  ay,
+  bx,
+  by,
   rectWidth = 24,
   rectHeight = 100,
   numRects = 8,
 ) {
+  let dx = bx - ax;
+  let dy = by - ay;
+  let w = dist(ax, ay, bx, by);
+  let angle = atan2(dy, dx);
+  let worldX = (ax + bx) * 0.5;
+  let worldY = (ay + by) * 0.5;
+
   let key = [
-    cx,
-    cy,
+    id,
     w,
     rectWidth,
     rectHeight,
@@ -39,12 +94,9 @@ function createrelationship(
     removeGroupSize,
   ].join("_");
 
-  // Rebuild state when parameters change.
-  if (!relationshipState || relationshipState.key !== key) {
-    relationshipState = makeRelationshipState(
+  if (!relationshipStates[id] || relationshipStates[id].key !== key) {
+    relationshipStates[id] = makeRelationshipState(
       key,
-      cx,
-      cy,
       w,
       rectWidth,
       rectHeight,
@@ -52,24 +104,22 @@ function createrelationship(
     );
   }
 
-  updateRelationship(relationshipState);
-  drawRelationship(relationshipState);
+  let state = relationshipStates[id];
+  state.worldX = worldX;
+  state.worldY = worldY;
+  state.angle = angle;
+
+  updateRelationship(state);
+  drawRelationship(state);
 }
 
-function makeRelationshipState(
-  key,
-  cx,
-  cy,
-  w,
-  rectWidth,
-  rectHeight,
-  numRects,
-) {
+function makeRelationshipState(key, w, rectWidth, rectHeight, numRects) {
   let dotSize = max(8, rectHeight * 0.48); // Dot size is proportional to rectangle height.
   let sidePadding = 24;
 
-  let leftX = cx - w / 2;
-  let rightX = cx + w / 2;
+  // Local coordinates: relationship center is at x=0, y=0.
+  let leftX = -w / 2;
+  let rightX = w / 2;
 
   let innerLeft = leftX + dotSize / 2 + sidePadding;
   let innerRight = rightX - dotSize / 2 - sidePadding;
@@ -80,7 +130,7 @@ function makeRelationshipState(
 
   let gap = count > 1 ? (available - count * rectWidth) / (count - 1) : 0;
   let usedWidth = count * rectWidth + (count - 1) * gap;
-  let startX = cx - usedWidth / 2;
+  let startX = -usedWidth / 2;
 
   let slots = [];
   for (let i = 0; i < count; i++) {
@@ -118,8 +168,11 @@ function makeRelationshipState(
 
   return {
     key: key,
-    cx: cx,
-    cy: cy,
+    cx: 0,
+    cy: 0,
+    worldX: 0,
+    worldY: 0,
+    angle: 0,
     leftX: leftX,
     rightX: rightX,
     targetLeftX: leftX,
@@ -228,6 +281,10 @@ function updateRelationship(state) {
 }
 
 function drawRelationship(state) {
+  push();
+  translate(state.worldX, state.worldY);
+  rotate(state.angle);
+
   noStroke();
   fill(105);
 
@@ -245,6 +302,8 @@ function drawRelationship(state) {
     let drawY = state.cy - rectObj.h / 2;
     rect(drawX, drawY, rectObj.w, rectObj.h);
   }
+
+  pop();
 }
 
 function idToColor(id, count) {
@@ -407,11 +466,11 @@ function relayoutRelationship(state) {
   }
 
   let halfSpan = usedWidth / 2 + state.sidePadding + state.dotSize / 2;
-  state.targetLeftX = state.cx - halfSpan;
-  state.targetRightX = state.cx + halfSpan;
+  state.targetLeftX = -halfSpan;
+  state.targetRightX = halfSpan;
 
   state.slots = [];
-  let startX = state.cx - usedWidth / 2;
+  let startX = -usedWidth / 2;
   for (let i = 0; i < count; i++) {
     state.slots.push(startX + i * (state.rectWidth + state.gap));
     state.rects[i].targetX = state.slots[i];
@@ -433,8 +492,8 @@ function respawnRectangles(state) {
     rects.push({
       id: id,
       color: idToColor(id, count),
-      x: state.cx, // Reappear from center
-      targetX: state.cx,
+      x: 0, // Reappear from center (local space)
+      targetX: 0,
       w: state.rectWidth,
       h: state.rectHeight,
       noiseSeedW: random(1000),
@@ -446,7 +505,7 @@ function respawnRectangles(state) {
   state.rects = rects;
 
   let usedWidth = count * state.rectWidth + (count - 1) * state.gap;
-  let startX = state.cx - usedWidth / 2;
+  let startX = -usedWidth / 2;
   state.slots = [];
   for (let i = 0; i < count; i++) {
     state.slots.push(startX + i * (state.rectWidth + state.gap));
@@ -454,8 +513,8 @@ function respawnRectangles(state) {
   }
 
   let halfSpan = usedWidth / 2 + state.sidePadding + state.dotSize / 2;
-  state.targetLeftX = state.cx - halfSpan;
-  state.targetRightX = state.cx + halfSpan;
+  state.targetLeftX = -halfSpan;
+  state.targetRightX = halfSpan;
 
   state.activeAlgorithm = resolveSortingAlgorithm(sortingAlgorithm);
   rebuildSortForCurrentOrder(state);
@@ -467,4 +526,22 @@ function resolveSortingAlgorithm(algorithm) {
   if (algorithm !== "random") return algorithm;
   let options = ["bubble", "selection", "insertion"];
   return random(options);
+}
+
+function offsetSegment(a, b, index, amount) {
+  let dx = b.x - a.x;
+  let dy = b.y - a.y;
+  let len = max(1, sqrt(dx * dx + dy * dy));
+  let nx = -dy / len;
+  let ny = dx / len;
+  let sign = index % 2 === 0 ? -1 : 1;
+  let ox = nx * amount * sign;
+  let oy = ny * amount * sign;
+
+  return {
+    ax: a.x + ox,
+    ay: a.y + oy,
+    bx: b.x + ox,
+    by: b.y + oy,
+  };
 }
