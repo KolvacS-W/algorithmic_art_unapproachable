@@ -119,6 +119,7 @@ function makeRelationshipState(
     dotSize: dotSize,
     sidePadding: sidePadding,
     gap: gap,
+    baseCount: count,
     rectWidth: rectWidth,
     rectHeight: rectHeight,
     slots: slots,
@@ -126,6 +127,8 @@ function makeRelationshipState(
     swapPlan: swapPlan,
     swapIndex: 0,
     done: false,
+    merging: false,
+    mergeStartDistance: 0,
     lastStepTime: millis(),
   };
 }
@@ -141,6 +144,25 @@ function updateRelationship(state) {
   state.rightX = lerp(state.rightX, state.targetRightX, moveEase);
   for (let rectObj of state.rects) {
     rectObj.x = lerp(rectObj.x, rectObj.targetX, moveEase);
+  }
+
+  // If all rectangles are gone, move dots toward merging, then respawn before full merge.
+  if (state.rects.length === 0) {
+    if (!state.merging) {
+      state.merging = true;
+      state.mergeStartDistance = abs(state.rightX - state.leftX);
+      state.targetLeftX = state.cx;
+      state.targetRightX = state.cx;
+    }
+
+    let currentDistance = abs(state.rightX - state.leftX);
+    let respawnDistance = state.mergeStartDistance * 0.45;
+
+    // Respawn before the dots fully merge.
+    if (currentDistance <= respawnDistance) {
+      respawnRectangles(state);
+    }
+    return;
   }
 
   // Wait until everything settles before update/removal/sort step.
@@ -366,4 +388,37 @@ function rebuildSortForCurrentOrder(state) {
   state.swapPlan = buildSwapPlan(ids, sortingAlgorithm);
   state.swapIndex = 0;
   state.done = state.swapPlan.length === 0;
+}
+
+function respawnRectangles(state) {
+  let count = state.baseCount;
+  let rects = [];
+
+  for (let id = 1; id <= count; id++) {
+    rects.push({
+      id: id,
+      color: idToColor(id, count),
+      x: state.cx, // Reappear from center
+      targetX: state.cx,
+    });
+  }
+
+  shuffleArray(rects);
+  state.rects = rects;
+
+  let usedWidth = count * state.rectWidth + (count - 1) * state.gap;
+  let startX = state.cx - usedWidth / 2;
+  state.slots = [];
+  for (let i = 0; i < count; i++) {
+    state.slots.push(startX + i * (state.rectWidth + state.gap));
+    state.rects[i].targetX = state.slots[i];
+  }
+
+  let halfSpan = usedWidth / 2 + state.sidePadding + state.dotSize / 2;
+  state.targetLeftX = state.cx - halfSpan;
+  state.targetRightX = state.cx + halfSpan;
+
+  rebuildSortForCurrentOrder(state);
+  state.merging = false;
+  state.lastStepTime = millis();
 }
