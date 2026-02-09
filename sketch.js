@@ -1,10 +1,21 @@
-let sortStepsPerSecond = 80; // Bubble-sort steps per second (adjust this)
+let sortStepsPerSecond = 40; // Bubble-sort steps per second (adjust this)
 let moveEase = 0.2; // Rectangle movement smoothness/speed (0.05 to 0.4)
 let sortingAlgorithm = "random"; // "random", "bubble", "selection", "insertion"
-let removeGroupSize = 3; // When N consecutive ascending IDs appear, remove them
-let noiseSpeed = 0.06; // Speed of Perlin-noise size changes
-let noiseAmplitude = 0.8; // Size changes around +/-40% from average width/height
+let removeGroupSize = 6; // When N consecutive ascending IDs appear, remove them
+let noiseSpeedW = 0.01; // Perlin-noise speed for rectangle width
+let noiseSpeedH = 0.01; // Perlin-noise speed for rectangle height
+let noiseAmplitudeW = 0.1; // Width changes around this +/- ratio from average rectWidth
+let noiseAmplitudeH = 0.6; // Height changes around this +/- ratio from average rectHeight
 let dotBeatAmount = 0.45; // Dot pulse strength (heartbeat feel)
+let colorModeOption = "mono"; // "palette" or "mono"
+const PALETTE = [
+  "#20C4F4", // cyan
+  "#FF1D8E", // magenta
+  "#FFD11A", // yellow
+  "#00A651", // green
+  "#3050F8", // blue
+  "#0F1020", // deep navy
+];
 
 let relationshipStates = {};
 
@@ -13,7 +24,11 @@ function setup() {
 }
 
 function draw() {
-  background(245);
+  if (colorModeOption === "mono") {
+    background("black");
+  } else {
+    background("#e6e6e8");
+  }
   drawRelationshipSegments();
 }
 
@@ -46,23 +61,34 @@ function drawRelationshipSegments() {
   let I4 = p(e / 2, -e / 2);
 
   let segments = [
-    [TL, I1], [I1, C], [C, I2], [I2, BR], // TL -> BR diagonal split
-    [BL, I3], [I3, C], [C, I4], [I4, TR], // BL -> TR diagonal split
-    [ML, I1], [I1, MT], // diamond left-top edge split
-    [MT, I4], [I4, MR], // diamond top-right edge split
-    [MR, I2], [I2, MB], // diamond right-bottom edge split
-    [MB, I3], [I3, ML], // diamond bottom-left edge split
+    [TL, I1],
+    [I1, C],
+    [C, I2],
+    [I2, BR], // TL -> BR diagonal split
+    [BL, I3],
+    [I3, C],
+    [C, I4],
+    [I4, TR], // BL -> TR diagonal split
+    [ML, I1],
+    [I1, MT], // diamond left-top edge split
+    [MT, I4],
+    [I4, MR], // diamond top-right edge split
+    [MR, I2],
+    [I2, MB], // diamond right-bottom edge split
+    [MB, I3],
+    [I3, ML], // diamond bottom-left edge split
   ];
 
-  for (let i = 0; i < segments.length; i++) {
-    let a = segments[i][0];
-    let b = segments[i][1];
+  // Spread shared endpoints so dots from different relationships do not overlap.
+  let spreadRadius = 16;
+  let shiftedSegments = spreadSharedNodes(segments, spreadRadius);
 
-    // Small perpendicular offset so shared-node dots do not fully overlap.
-    let shifted = offsetSegment(a, b, i, 7);
+  for (let i = 0; i < shiftedSegments.length; i++) {
+    let a = shiftedSegments[i][0];
+    let b = shiftedSegments[i][1];
 
     // id, ax, ay, bx, by, rectWidth, rectHeight, numRects
-    createrelationship("seg_" + i, shifted.ax, shifted.ay, shifted.bx, shifted.by, 10, 36, 8);
+    createrelationship("seg_" + i, a.x, a.y, b.x, b.y, 6, 36, 16);
   }
 }
 
@@ -92,11 +118,13 @@ function createrelationship(
     numRects,
     sortingAlgorithm,
     removeGroupSize,
+    colorModeOption,
   ].join("_");
 
   if (!relationshipStates[id] || relationshipStates[id].key !== key) {
     relationshipStates[id] = makeRelationshipState(
       key,
+      id,
       w,
       rectWidth,
       rectHeight,
@@ -113,7 +141,14 @@ function createrelationship(
   drawRelationship(state);
 }
 
-function makeRelationshipState(key, w, rectWidth, rectHeight, numRects) {
+function makeRelationshipState(
+  key,
+  relationId,
+  w,
+  rectWidth,
+  rectHeight,
+  numRects,
+) {
   let dotSize = max(8, rectHeight * 0.48); // Dot size is proportional to rectangle height.
   let sidePadding = 24;
 
@@ -138,11 +173,20 @@ function makeRelationshipState(key, w, rectWidth, rectHeight, numRects) {
   }
 
   // IDs are 1..count. Each ID has a gradient color.
+  let dotColorA;
+  let dotColorB;
+  if (colorModeOption === "mono") {
+    dotColorA = color(110);
+    dotColorB = color(245);
+  } else {
+    let pair = palettePairForId(relationId);
+    dotColorA = color(PALETTE[pair[0]]);
+    dotColorB = color(PALETTE[pair[1]]);
+  }
   let rects = [];
   for (let id = 1; id <= count; id++) {
     rects.push({
       id: id,
-      color: idToColor(id, count),
       x: 0,
       targetX: 0,
       w: rectWidth,
@@ -179,6 +223,8 @@ function makeRelationshipState(key, w, rectWidth, rectHeight, numRects) {
     targetRightX: rightX,
     dotSize: dotSize,
     currentDotSize: dotSize,
+    dotColorA: dotColorA,
+    dotColorB: dotColorB,
     sidePadding: sidePadding,
     gap: gap,
     baseCount: count,
@@ -212,11 +258,12 @@ function updateRelationship(state) {
 
     // Dynamic size using Perlin noise.
     // rectWidth/rectHeight stay the average values.
-    let nW = noise(rectObj.noiseSeedW, frameCount * noiseSpeed);
-    let nH = noise(rectObj.noiseSeedH, frameCount * noiseSpeed);
-    let amp = max(0, noiseAmplitude);
-    let widthScale = max(0.1, 1 + amp * (nW * 2 - 1));
-    let heightScale = max(0.1, 1 + amp * (nH * 2 - 1));
+    let nW = noise(rectObj.noiseSeedW, frameCount * noiseSpeedW);
+    let nH = noise(rectObj.noiseSeedH, frameCount * noiseSpeedH);
+    let ampW = max(0, noiseAmplitudeW);
+    let ampH = max(0, noiseAmplitudeH);
+    let widthScale = max(0.1, 1 + ampW * (nW * 2 - 1));
+    let heightScale = max(0.1, 1 + ampH * (nH * 2 - 1));
     rectObj.w = state.rectWidth * widthScale;
     rectObj.h = state.rectHeight * heightScale;
     noiseSum += (nW + nH) * 0.5;
@@ -286,31 +333,27 @@ function drawRelationship(state) {
   rotate(state.angle);
 
   noStroke();
-  fill(105);
 
   // Dots
+  fill(state.dotColorA);
   circle(state.leftX, state.cy, state.currentDotSize);
+  fill(state.dotColorB);
   circle(state.rightX, state.cy, state.currentDotSize);
 
   // Rectangles
   rectMode(CORNER);
+  let gradientTById = buildGradientTById(state.rects);
   for (let rectObj of state.rects) {
-    fill(rectObj.color);
     // Keep each dynamic rectangle centered on its slot center.
     let slotCenterX = rectObj.x + state.rectWidth / 2;
+    let t = gradientTById[rectObj.id];
+    fill(lerpColor(state.dotColorA, state.dotColorB, t));
     let drawX = slotCenterX - rectObj.w / 2;
     let drawY = state.cy - rectObj.h / 2;
     rect(drawX, drawY, rectObj.w, rectObj.h);
   }
 
   pop();
-}
-
-function idToColor(id, count) {
-  // Low id = darker, high id = lighter (gradient).
-  let t = count === 1 ? 0 : (id - 1) / (count - 1);
-  let shade = lerp(70, 200, t);
-  return color(shade);
 }
 
 function allRectsSettled(rects) {
@@ -491,7 +534,6 @@ function respawnRectangles(state) {
   for (let id = 1; id <= count; id++) {
     rects.push({
       id: id,
-      color: idToColor(id, count),
       x: 0, // Reappear from center (local space)
       targetX: 0,
       w: state.rectWidth,
@@ -528,20 +570,77 @@ function resolveSortingAlgorithm(algorithm) {
   return random(options);
 }
 
-function offsetSegment(a, b, index, amount) {
-  let dx = b.x - a.x;
-  let dy = b.y - a.y;
-  let len = max(1, sqrt(dx * dx + dy * dy));
-  let nx = -dy / len;
-  let ny = dx / len;
-  let sign = index % 2 === 0 ? -1 : 1;
-  let ox = nx * amount * sign;
-  let oy = ny * amount * sign;
+function palettePairForId(id) {
+  let idx = segmentIndexFromId(id);
+  let pairs = [];
+  for (let a = 0; a < PALETTE.length; a++) {
+    for (let b = 0; b < PALETTE.length; b++) {
+      if (a !== b) pairs.push([a, b]);
+    }
+  }
+  return pairs[idx % pairs.length];
+}
 
-  return {
-    ax: a.x + ox,
-    ay: a.y + oy,
-    bx: b.x + ox,
-    by: b.y + oy,
-  };
+function segmentIndexFromId(id) {
+  let m = match(id, /(\d+)$/);
+  return m ? int(m[1]) : 0;
+}
+
+function spreadSharedNodes(segments, radius) {
+  let shifted = segments.map((seg) => [
+    { x: seg[0].x, y: seg[0].y },
+    { x: seg[1].x, y: seg[1].y },
+  ]);
+
+  let nodeRefs = {};
+  for (let i = 0; i < shifted.length; i++) {
+    for (let end = 0; end < 2; end++) {
+      let p = shifted[i][end];
+      let key = pointKey(p);
+      if (!nodeRefs[key]) nodeRefs[key] = [];
+      nodeRefs[key].push({ segIndex: i, endIndex: end, x: p.x, y: p.y });
+    }
+  }
+
+  for (let key in nodeRefs) {
+    let refs = nodeRefs[key];
+    if (refs.length <= 1) continue;
+
+    let cx = refs[0].x;
+    let cy = refs[0].y;
+    let phase = (cx * 0.013 + cy * 0.009) % TWO_PI;
+
+    for (let i = 0; i < refs.length; i++) {
+      let a = phase + (TWO_PI * i) / refs.length;
+      let ox = cos(a) * radius;
+      let oy = sin(a) * radius;
+      let ref = refs[i];
+      shifted[ref.segIndex][ref.endIndex].x = cx + ox;
+      shifted[ref.segIndex][ref.endIndex].y = cy + oy;
+    }
+  }
+
+  return shifted;
+}
+
+function pointKey(p) {
+  return nf(p.x, 1, 2) + "_" + nf(p.y, 1, 2);
+}
+
+function buildGradientTById(rects) {
+  let ids = rects
+    .map((r) => r.id)
+    .slice()
+    .sort((a, b) => a - b);
+
+  let map = {};
+  if (ids.length === 1) {
+    map[ids[0]] = 0.5;
+    return map;
+  }
+
+  for (let i = 0; i < ids.length; i++) {
+    map[ids[i]] = i / (ids.length - 1);
+  }
+  return map;
 }
