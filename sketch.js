@@ -1,7 +1,9 @@
 let sortStepsPerSecond = 80; // Bubble-sort steps per second (adjust this)
 let moveEase = 0.2; // Rectangle movement smoothness/speed (0.05 to 0.4)
-let sortingAlgorithm = "selection"; // "bubble", "selection", "insertion"
+let sortingAlgorithm = "random"; // "random", "bubble", "selection", "insertion"
 let removeGroupSize = 3; // When N consecutive ascending IDs appear, remove them
+let noiseSpeed = 0.06; // Speed of Perlin-noise size changes
+let noiseAmplitude = 0.8; // Size changes around +/-40% from average width/height
 
 let relationshipState = null;
 
@@ -13,7 +15,7 @@ function draw() {
   background(245);
 
   // cx, cy, distanceBetweenDots, rectWidth, rectHeight, numRects
-  createrelationship(400, 300, 520, 16, 60, 20);
+  createrelationship(400, 300, 520, 12, 60, 30);
 }
 
 // Creates and animates a relationship of two dots and sortable rectangles.
@@ -92,6 +94,10 @@ function makeRelationshipState(
       color: idToColor(id, count),
       x: 0,
       targetX: 0,
+      w: rectWidth,
+      h: rectHeight,
+      noiseSeedW: random(1000),
+      noiseSeedH: random(1000),
     });
   }
 
@@ -99,8 +105,9 @@ function makeRelationshipState(
   shuffleArray(rects);
 
   // Build swap sequence using the chosen sorting algorithm.
+  let activeAlgorithm = resolveSortingAlgorithm(sortingAlgorithm);
   let startIds = rects.map((r) => r.id);
-  let swapPlan = buildSwapPlan(startIds, sortingAlgorithm);
+  let swapPlan = buildSwapPlan(startIds, activeAlgorithm);
 
   // Start each rectangle at its current slot.
   for (let i = 0; i < rects.length; i++) {
@@ -126,6 +133,7 @@ function makeRelationshipState(
     rects: rects,
     swapPlan: swapPlan,
     swapIndex: 0,
+    activeAlgorithm: activeAlgorithm,
     done: false,
     merging: false,
     mergeStartDistance: 0,
@@ -144,6 +152,16 @@ function updateRelationship(state) {
   state.rightX = lerp(state.rightX, state.targetRightX, moveEase);
   for (let rectObj of state.rects) {
     rectObj.x = lerp(rectObj.x, rectObj.targetX, moveEase);
+
+    // Dynamic size using Perlin noise.
+    // rectWidth/rectHeight stay the average values.
+    let nW = noise(rectObj.noiseSeedW, frameCount * noiseSpeed);
+    let nH = noise(rectObj.noiseSeedH, frameCount * noiseSpeed);
+    let amp = max(0, noiseAmplitude);
+    let widthScale = max(0.1, 1 + amp * (nW * 2 - 1));
+    let heightScale = max(0.1, 1 + amp * (nH * 2 - 1));
+    rectObj.w = state.rectWidth * widthScale;
+    rectObj.h = state.rectHeight * heightScale;
   }
 
   // If all rectangles are gone, move dots toward merging, then respawn before full merge.
@@ -205,10 +223,14 @@ function drawRelationship(state) {
   circle(state.rightX, state.cy, state.dotSize);
 
   // Rectangles
-  let topY = state.cy - state.rectHeight / 2;
+  rectMode(CORNER);
   for (let rectObj of state.rects) {
     fill(rectObj.color);
-    rect(rectObj.x, topY, state.rectWidth, state.rectHeight);
+    // Keep each dynamic rectangle centered on its slot center.
+    let slotCenterX = rectObj.x + state.rectWidth / 2;
+    let drawX = slotCenterX - rectObj.w / 2;
+    let drawY = state.cy - rectObj.h / 2;
+    rect(drawX, drawY, rectObj.w, rectObj.h);
   }
 }
 
@@ -385,7 +407,7 @@ function relayoutRelationship(state) {
 
 function rebuildSortForCurrentOrder(state) {
   let ids = state.rects.map((r) => r.id);
-  state.swapPlan = buildSwapPlan(ids, sortingAlgorithm);
+  state.swapPlan = buildSwapPlan(ids, state.activeAlgorithm);
   state.swapIndex = 0;
   state.done = state.swapPlan.length === 0;
 }
@@ -400,6 +422,10 @@ function respawnRectangles(state) {
       color: idToColor(id, count),
       x: state.cx, // Reappear from center
       targetX: state.cx,
+      w: state.rectWidth,
+      h: state.rectHeight,
+      noiseSeedW: random(1000),
+      noiseSeedH: random(1000),
     });
   }
 
@@ -418,7 +444,14 @@ function respawnRectangles(state) {
   state.targetLeftX = state.cx - halfSpan;
   state.targetRightX = state.cx + halfSpan;
 
+  state.activeAlgorithm = resolveSortingAlgorithm(sortingAlgorithm);
   rebuildSortForCurrentOrder(state);
   state.merging = false;
   state.lastStepTime = millis();
+}
+
+function resolveSortingAlgorithm(algorithm) {
+  if (algorithm !== "random") return algorithm;
+  let options = ["bubble", "selection", "insertion"];
+  return random(options);
 }
