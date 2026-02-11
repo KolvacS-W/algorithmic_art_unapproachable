@@ -7,6 +7,15 @@ let noiseSpeedH = 0.01; // Perlin-noise speed for rectangle height
 let noiseAmplitudeW = 0.01; // Width changes around this +/- ratio from average rectWidth
 let noiseAmplitudeH = 0.01; // Height changes around this +/- ratio from average rectHeight
 let dotBeatAmount = 0.45; // Dot pulse strength (heartbeat feel)
+let glowLineThickness = 1.6; // Main white line thickness
+let glowBlurSpread = 24; // Extra blur thickness around the line
+let glowBlurLayers = 16; // Number of blur layers
+let glowCoreAlpha = 2; // Main line transparency
+let glowLayerAlphaMin = 1; // Blur layer min alpha
+let glowLayerAlphaMax = 8; // Blur layer max alpha
+let mergedDotColor = "#FF3FA4"; // Pink color after full merge
+let mergePauseMinMs = 900; // Minimum pause time after merge
+let mergePauseMaxMs = 2600; // Maximum pause time after merge
 let colorModeOption = "mono"; // "palette" or "mono"
 const PALETTE = [
   "#20C4F4", // cyan
@@ -81,7 +90,7 @@ function buildRelationshipBarLayout() {
     let barY1 = y + barH;
     let cy = (barY0 + barY1) * 0.5;
 
-    let colCount = floor(random(2, 7));
+    let colCount = floor(random(2, 5));
     let minCellW = max(70, innerW * 0.09);
     let maxCellW = innerW * 0.45;
     let colWidths = randomPartition(innerW, colCount, minCellW, maxCellW);
@@ -285,7 +294,8 @@ function makeRelationshipState(
     activeAlgorithm: activeAlgorithm,
     done: false,
     merging: false,
-    mergeStartDistance: 0,
+    mergePauseStarted: false,
+    mergePauseUntil: 0,
     lastStepTime: millis(),
   };
 }
@@ -325,20 +335,27 @@ function updateRelationship(state) {
   let targetDotSize = state.dotSize * (1 + dotBeatAmount * beatShape);
   state.currentDotSize = lerp(state.currentDotSize, targetDotSize, 0.25);
 
-  // If all rectangles are gone, move dots toward merging, then respawn before full merge.
+  // If all rectangles are gone, merge dots into one, pause, then respawn.
   if (state.rects.length === 0) {
     if (!state.merging) {
       state.merging = true;
-      state.mergeStartDistance = abs(state.rightX - state.leftX);
       state.targetLeftX = state.cx;
       state.targetRightX = state.cx;
+      state.mergePauseStarted = false;
+      state.mergePauseUntil = 0;
     }
 
-    let currentDistance = abs(state.rightX - state.leftX);
-    let respawnDistance = state.mergeStartDistance * 0.45;
+    // Hold a strong, steady merged-dot presence during pause.
+    state.currentDotSize = lerp(state.currentDotSize, state.dotSize * 1.12, 0.2);
 
-    // Respawn before the dots fully merge.
-    if (currentDistance <= respawnDistance) {
+    let mergedDistance = abs(state.rightX - state.leftX);
+    if (!state.mergePauseStarted && mergedDistance < 0.8) {
+      state.mergePauseStarted = true;
+      state.mergePauseUntil = millis() + random(mergePauseMinMs, mergePauseMaxMs);
+    }
+
+    // Strong pause as one dot before restarting.
+    if (state.mergePauseStarted && millis() >= state.mergePauseUntil) {
       respawnRectangles(state);
     }
     return;
@@ -380,9 +397,20 @@ function drawRelationship(state) {
   translate(state.worldX, state.worldY);
   rotate(state.angle);
 
+  // Draw glow line first so it appears behind rectangles and dots.
+  drawGlowLine(state);
   noStroke();
 
   // Dots
+  if (state.rects.length === 0) {
+    fill(mergedDotColor);
+    let mergedX = (state.leftX + state.rightX) * 0.5;
+    let mergedSize = state.currentDotSize * 1.12;
+    circle(mergedX, state.cy, mergedSize);
+    pop();
+    return;
+  }
+
   fill(state.dotColorA);
   circle(state.leftX, state.cy, state.currentDotSize);
   fill(state.dotColorB);
@@ -402,6 +430,61 @@ function drawRelationship(state) {
   }
 
   pop();
+}
+
+function drawGlowLine(state) {
+  let points = getGlowLinePoints(state);
+  if (points.length < 2) return;
+
+  noFill();
+  strokeCap(ROUND);
+  strokeJoin(ROUND);
+  curveTightness(-0.35);
+
+  // Soft blur layers.
+  for (let i = glowBlurLayers; i >= 1; i--) {
+    let t = i / glowBlurLayers;
+    let w = glowLineThickness + glowBlurSpread * pow(t, 1.15);
+    let a = lerp(glowLayerAlphaMin, glowLayerAlphaMax, t);
+    stroke(255, a);
+    strokeWeight(w);
+    drawSmoothPolyline(points);
+  }
+
+  // Core line.
+  stroke(255, glowCoreAlpha);
+  strokeWeight(glowLineThickness);
+  drawSmoothPolyline(points);
+}
+
+function getGlowLinePoints(state) {
+  let points = [];
+  points.push({ x: state.leftX, y: state.cy });
+
+  // Follow the current middle points of rectangles, from left to right.
+  let mids = [];
+  for (let rectObj of state.rects) {
+    mids.push({
+      x: rectObj.x + state.rectWidth / 2,
+      y: state.cy,
+    });
+  }
+  mids.sort((a, b) => a.x - b.x);
+  for (let p of mids) points.push(p);
+
+  points.push({ x: state.rightX, y: state.cy });
+  return points;
+}
+
+function drawSmoothPolyline(points) {
+  beginShape();
+  curveVertex(points[0].x, points[0].y);
+  for (let p of points) {
+    curveVertex(p.x, p.y);
+  }
+  let last = points[points.length - 1];
+  curveVertex(last.x, last.y);
+  endShape();
 }
 
 function allRectsSettled(rects) {
@@ -609,6 +692,8 @@ function respawnRectangles(state) {
   state.activeAlgorithm = resolveSortingAlgorithm(sortingAlgorithm);
   rebuildSortForCurrentOrder(state);
   state.merging = false;
+  state.mergePauseStarted = false;
+  state.mergePauseUntil = 0;
   state.lastStepTime = millis();
 }
 
