@@ -4,8 +4,8 @@ let sortingAlgorithm = "random"; // "random", "bubble", "selection", "insertion"
 let removeGroupSize = 6; // When N consecutive ascending IDs appear, remove them
 let noiseSpeedW = 0.01; // Perlin-noise speed for rectangle width
 let noiseSpeedH = 0.01; // Perlin-noise speed for rectangle height
-let noiseAmplitudeW = 0.1; // Width changes around this +/- ratio from average rectWidth
-let noiseAmplitudeH = 0.6; // Height changes around this +/- ratio from average rectHeight
+let noiseAmplitudeW = 0.01; // Width changes around this +/- ratio from average rectWidth
+let noiseAmplitudeH = 0.01; // Height changes around this +/- ratio from average rectHeight
 let dotBeatAmount = 0.45; // Dot pulse strength (heartbeat feel)
 let colorModeOption = "mono"; // "palette" or "mono"
 const PALETTE = [
@@ -18,6 +18,7 @@ const PALETTE = [
 ];
 
 let relationshipStates = {};
+let relationshipLayout = null;
 
 function setup() {
   createCanvas(800, 600);
@@ -29,67 +30,114 @@ function draw() {
   } else {
     background("#e6e6e8");
   }
-  drawRelationshipSegments();
+  drawRelationshipBars();
 }
 
-// Divide a square into diagonal segments and place a relationship on each segment.
-function drawRelationshipSegments() {
-  let s = min(width, height) * 0.86;
-  let e = s / 2;
-  let cx = width / 2;
-  let cy = height / 2;
-
-  function p(x, y) {
-    return { x: cx + x, y: cy + y };
+// Randomly split the canvas into horizontal bars; split each bar vertically.
+// Each cell gets one fitted relationship.
+function drawRelationshipBars() {
+  if (
+    !relationshipLayout ||
+    relationshipLayout.canvasW !== width ||
+    relationshipLayout.canvasH !== height
+  ) {
+    relationshipLayout = buildRelationshipBarLayout();
+    relationshipStates = {};
   }
 
-  // Square corners and edge midpoints.
-  let TL = p(-e, -e);
-  let TR = p(e, -e);
-  let BR = p(e, e);
-  let BL = p(-e, e);
-  let MT = p(0, -e);
-  let MR = p(e, 0);
-  let MB = p(0, e);
-  let ML = p(-e, 0);
-  let C = p(0, 0);
-
-  // Intersections between the corner diagonals and the diamond.
-  let I1 = p(-e / 2, -e / 2);
-  let I2 = p(e / 2, e / 2);
-  let I3 = p(-e / 2, e / 2);
-  let I4 = p(e / 2, -e / 2);
-
-  let segments = [
-    [TL, I1],
-    [I1, C],
-    [C, I2],
-    [I2, BR], // TL -> BR diagonal split
-    [BL, I3],
-    [I3, C],
-    [C, I4],
-    [I4, TR], // BL -> TR diagonal split
-    [ML, I1],
-    [I1, MT], // diamond left-top edge split
-    [MT, I4],
-    [I4, MR], // diamond top-right edge split
-    [MR, I2],
-    [I2, MB], // diamond right-bottom edge split
-    [MB, I3],
-    [I3, ML], // diamond bottom-left edge split
-  ];
-
-  // Spread shared endpoints so dots from different relationships do not overlap.
-  let spreadRadius = 16;
-  let shiftedSegments = spreadSharedNodes(segments, spreadRadius);
-
-  for (let i = 0; i < shiftedSegments.length; i++) {
-    let a = shiftedSegments[i][0];
-    let b = shiftedSegments[i][1];
-
-    // id, ax, ay, bx, by, rectWidth, rectHeight, numRects
-    createrelationship("seg_" + i, a.x, a.y, b.x, b.y, 6, 36, 16);
+  for (let item of relationshipLayout.items) {
+    createrelationship(
+      item.id,
+      item.ax,
+      item.ay,
+      item.bx,
+      item.by,
+      item.rectWidth,
+      item.rectHeight,
+      item.numRects,
+    );
   }
+}
+
+function buildRelationshipBarLayout() {
+  let margin = min(width, height) * 0.04;
+  let x0 = margin;
+  let x1 = width - margin;
+  let y0 = margin;
+  let y1 = height - margin;
+  let innerW = x1 - x0;
+  let innerH = y1 - y0;
+
+  let barCount = floor(random(5, 9));
+  let minBarH = max(42, innerH * 0.08);
+  let maxBarH = innerH * 0.28;
+  let barHeights = randomPartition(innerH, barCount, minBarH, maxBarH);
+
+  let items = [];
+  let y = y0;
+  for (let b = 0; b < barHeights.length; b++) {
+    let barH = barHeights[b];
+    let barY0 = y;
+    let barY1 = y + barH;
+    let cy = (barY0 + barY1) * 0.5;
+
+    let colCount = floor(random(2, 7));
+    let minCellW = max(70, innerW * 0.09);
+    let maxCellW = innerW * 0.45;
+    let colWidths = randomPartition(innerW, colCount, minCellW, maxCellW);
+
+    let x = x0;
+    for (let c = 0; c < colWidths.length; c++) {
+      let cellW = colWidths[c];
+      let cellX0 = x;
+      let cellX1 = x + cellW;
+
+      let edgePad = min(18, cellW * 0.12);
+      let ax = cellX0 + edgePad;
+      let bx = cellX1 - edgePad;
+      if (bx - ax > 24) {
+        let rectHeight = constrain(barH * 0.56, 14, barH * 0.86);
+        let rectWidth = constrain(rectHeight * random(0.14, 0.24), 3, 14);
+        let numRects = floor(random(6, 18));
+
+        items.push({
+          id: "bar_" + b + "_cell_" + c,
+          ax: ax,
+          ay: cy,
+          bx: bx,
+          by: cy,
+          rectWidth: rectWidth,
+          rectHeight: rectHeight,
+          numRects: numRects,
+        });
+      }
+      x += cellW;
+    }
+    y += barH;
+  }
+
+  return {
+    canvasW: width,
+    canvasH: height,
+    items: items,
+  };
+}
+
+function randomPartition(total, count, minSize, maxSize) {
+  let sizes = [];
+  let remaining = total;
+  let remainingParts = count;
+
+  for (let i = 0; i < count - 1; i++) {
+    let minAllowed = max(minSize, remaining - maxSize * (remainingParts - 1));
+    let maxAllowed = min(maxSize, remaining - minSize * (remainingParts - 1));
+    let size = random(minAllowed, maxAllowed);
+    sizes.push(size);
+    remaining -= size;
+    remainingParts--;
+  }
+  sizes.push(remaining);
+  return sizes;
 }
 
 // Creates and animates one relationship between dot A(ax, ay) and dot B(bx, by).
@@ -571,7 +619,7 @@ function resolveSortingAlgorithm(algorithm) {
 }
 
 function palettePairForId(id) {
-  let idx = segmentIndexFromId(id);
+  let idx = hashStringToInt(id);
   let pairs = [];
   for (let a = 0; a < PALETTE.length; a++) {
     for (let b = 0; b < PALETTE.length; b++) {
@@ -581,50 +629,12 @@ function palettePairForId(id) {
   return pairs[idx % pairs.length];
 }
 
-function segmentIndexFromId(id) {
-  let m = match(id, /(\d+)$/);
-  return m ? int(m[1]) : 0;
-}
-
-function spreadSharedNodes(segments, radius) {
-  let shifted = segments.map((seg) => [
-    { x: seg[0].x, y: seg[0].y },
-    { x: seg[1].x, y: seg[1].y },
-  ]);
-
-  let nodeRefs = {};
-  for (let i = 0; i < shifted.length; i++) {
-    for (let end = 0; end < 2; end++) {
-      let p = shifted[i][end];
-      let key = pointKey(p);
-      if (!nodeRefs[key]) nodeRefs[key] = [];
-      nodeRefs[key].push({ segIndex: i, endIndex: end, x: p.x, y: p.y });
-    }
+function hashStringToInt(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (h * 31 + str.charCodeAt(i)) >>> 0;
   }
-
-  for (let key in nodeRefs) {
-    let refs = nodeRefs[key];
-    if (refs.length <= 1) continue;
-
-    let cx = refs[0].x;
-    let cy = refs[0].y;
-    let phase = (cx * 0.013 + cy * 0.009) % TWO_PI;
-
-    for (let i = 0; i < refs.length; i++) {
-      let a = phase + (TWO_PI * i) / refs.length;
-      let ox = cos(a) * radius;
-      let oy = sin(a) * radius;
-      let ref = refs[i];
-      shifted[ref.segIndex][ref.endIndex].x = cx + ox;
-      shifted[ref.segIndex][ref.endIndex].y = cy + oy;
-    }
-  }
-
-  return shifted;
-}
-
-function pointKey(p) {
-  return nf(p.x, 1, 2) + "_" + nf(p.y, 1, 2);
+  return h;
 }
 
 function buildGradientTById(rects) {
