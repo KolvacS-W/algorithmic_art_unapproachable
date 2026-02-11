@@ -20,6 +20,8 @@ let mergePauseMaxMs = 2600; // Maximum pause time after merge
 let mergeShakeMaxOffset = 4; // Max shake offset while merged
 let mergeShakeBlurLayers = 8; // Blurry halo layers for merged dot
 let mergeShakeBlurSpread = 10; // Max blur spread for merged dot
+let splitShadowDurationMs = 320; // Keep a fading pink shadow briefly when split starts
+let mergePinkOnlyThreshold = 0.82; // Switch to only-pink rendering late in merge
 let colorModeOption = "mono"; // "palette" or "mono"
 const PALETTE = [
   "#20C4F4", // cyan
@@ -386,10 +388,13 @@ function makeRelationshipState(
     activeAlgorithm: activeAlgorithm,
     done: false,
     merging: false,
+    mergeStartDistance: 0,
     mergePauseStarted: false,
     mergePauseStart: 0,
     mergePauseUntil: 0,
     mergeChaos: 0,
+    splitShadowStart: 0,
+    splitShadowUntil: 0,
     glowPoints: [],
     lastStepTime: millis(),
   };
@@ -442,6 +447,7 @@ function updateRelationship(state) {
   if (state.rects.length === 0) {
     if (!state.merging) {
       state.merging = true;
+      state.mergeStartDistance = max(1, abs(state.rightX - state.leftX));
       state.targetLeftX = state.cx;
       state.targetRightX = state.cx;
       state.mergePauseStarted = false;
@@ -463,6 +469,9 @@ function updateRelationship(state) {
       state.mergePauseStart = millis();
       state.mergePauseUntil =
         millis() + random(mergePauseMinMs, mergePauseMaxMs);
+      // Snap exactly to center once merged to avoid sub-pixel ghosting.
+      state.leftX = state.cx;
+      state.rightX = state.cx;
     }
 
     if (state.mergePauseStarted) {
@@ -513,14 +522,21 @@ function updateRelationship(state) {
 
 function drawRelationship(state) {
   // Draw glow line first so it appears behind rectangles and dots.
-  drawGlowLine(state);
+  if (state.rects.length > 0) {
+    drawGlowLine(state);
+  }
   noStroke();
 
   // Dots
   if (state.rects.length === 0) {
+    let leftPoint = curvePointForLocalX(state, state.leftX);
+    let rightPoint = curvePointForLocalX(state, state.rightX);
     let mergedLocalX = (state.leftX + state.rightX) * 0.5;
     let mergedPoint = curvePointForLocalX(state, mergedLocalX);
     let mergedSize = state.currentDotSize * 1.12;
+    let d = dist(leftPoint.x, leftPoint.y, rightPoint.x, rightPoint.y);
+    let mergeT = 1 - d / max(1, state.mergeStartDistance);
+    mergeT = constrain(mergeT, 0, 1);
     let chaos = pow(state.mergeChaos, 1.35);
     let shakeAmp = lerp(0.2, mergeShakeMaxOffset, chaos);
     let shakeFreq = lerp(0.2, 1.6, chaos);
@@ -530,19 +546,43 @@ function drawRelationship(state) {
     let x = mergedPoint.x + jx;
     let y = mergedPoint.y + jy;
 
-    // Blur grows stronger while merged chaos increases.
-    noStroke();
-    for (let i = mergeShakeBlurLayers; i >= 1; i--) {
-      let t = i / mergeShakeBlurLayers;
-      let spread = mergeShakeBlurSpread * chaos * t;
-      let a = lerp(2, 22, chaos) * t;
-      fill(255, 80, 170, a);
-      circle(x, y, mergedSize + spread);
+    // Remove overlap ghosts: either draw 2 dots OR pink dot, not both.
+    if (mergeT < mergePinkOnlyThreshold) {
+      fill(state.dotColorA);
+      circle(leftPoint.x, leftPoint.y, state.currentDotSize);
+      fill(state.dotColorB);
+      circle(rightPoint.x, rightPoint.y, state.currentDotSize);
+    } else {
+      // Only add blur after full merge pause starts.
+      if (state.mergePauseStarted) {
+        noStroke();
+        for (let i = mergeShakeBlurLayers; i >= 1; i--) {
+          let t = i / mergeShakeBlurLayers;
+          let spread = mergeShakeBlurSpread * chaos * t;
+          let a = lerp(2, 22, chaos) * t;
+          fill(255, 80, 170, a);
+          circle(x, y, mergedSize + spread);
+        }
+      }
+
+      fill(mergedDotColor);
+      circle(x, y, mergedSize);
     }
 
-    fill(mergedDotColor);
-    circle(x, y, mergedSize);
     return;
+  }
+
+  // During split start, keep a brief fading pink shadow so transition is continuous.
+  if (millis() < state.splitShadowUntil) {
+    let total = max(1, state.splitShadowUntil - state.splitShadowStart);
+    let progress = constrain((millis() - state.splitShadowStart) / total, 0, 1);
+    let alpha = 20 * (1 - progress);
+    let spread = mergeShakeBlurSpread * (1 - progress);
+    let midX = (curvePointForLocalX(state, state.leftX).x + curvePointForLocalX(state, state.rightX).x) * 0.5;
+    let midY = (curvePointForLocalX(state, state.leftX).y + curvePointForLocalX(state, state.rightX).y) * 0.5;
+    noStroke();
+    fill(255, 80, 170, alpha);
+    circle(midX, midY, state.currentDotSize * 1.1 + spread);
   }
 
   let leftPoint = curvePointForLocalX(state, state.leftX);
@@ -616,6 +656,12 @@ function updateGlowPath(state) {
   let control = getGlowLinePoints(state);
   let target = resamplePolyline(control, glowPathSamples);
   if (target.length < 2) return;
+
+  // When rectangles are gone, avoid path-lag trails ("afterimage").
+  if (state.rects.length === 0) {
+    state.glowPoints = target.map((p) => ({ x: p.x, y: p.y }));
+    return;
+  }
 
   if (state.glowPoints.length !== target.length) {
     state.glowPoints = target.map((p) => ({ x: p.x, y: p.y }));
@@ -934,10 +980,13 @@ function respawnRectangles(state) {
   state.activeAlgorithm = resolveSortingAlgorithm(sortingAlgorithm);
   rebuildSortForCurrentOrder(state);
   state.merging = false;
+  state.mergeStartDistance = 0;
   state.mergePauseStarted = false;
   state.mergePauseStart = 0;
   state.mergePauseUntil = 0;
   state.mergeChaos = 0;
+  state.splitShadowStart = millis();
+  state.splitShadowUntil = state.splitShadowStart + splitShadowDurationMs;
   state.lastStepTime = millis();
 }
 
@@ -965,6 +1014,7 @@ function hashStringToInt(str) {
   }
   return h;
 }
+
 
 function buildGradientTById(rects) {
   let ids = rects
