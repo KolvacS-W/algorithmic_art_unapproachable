@@ -2,10 +2,11 @@ let sortStepsPerSecond = 10; // Bubble-sort steps per second (adjust this)
 let moveEase = 0.1; // Rectangle movement smoothness/speed (0.05 to 0.4)
 let sortingAlgorithm = "random"; // "random", "bubble", "selection", "insertion"
 let removeGroupSize = 2; // When N consecutive ascending IDs appear, remove them
-let noiseSpeedW = 0.01; // Perlin-noise speed for rectangle width
-let noiseSpeedH = 0.01; // Perlin-noise speed for rectangle height
-let noiseAmplitudeW = 0.01; // Width changes around this +/- ratio from average rectWidth
-let noiseAmplitudeH = 0.01; // Height changes around this +/- ratio from average rectHeight
+let removeMode = "correct_position"; // "group" or "correct_position"
+let noiseSpeedW = 0.1; // Perlin-noise speed for rectangle width
+let noiseSpeedH = 0.1; // Perlin-noise speed for rectangle height
+let noiseAmplitudeW = 0.1; // Width changes around this +/- ratio from average rectWidth
+let noiseAmplitudeH = 0.1; // Height changes around this +/- ratio from average rectHeight
 let dotBeatAmount = 0.45; // Dot pulse strength (heartbeat feel)
 let glowLineThickness = 1.6; // Main white line thickness
 let glowBlurSpread = 24; // Extra blur thickness around the line
@@ -257,6 +258,7 @@ function createrelationship(
     numRects,
     sortingAlgorithm,
     removeGroupSize,
+    removeMode,
     colorModeOption,
   ].join("_");
 
@@ -492,8 +494,8 @@ function updateRelationship(state) {
   // Wait until everything settles before update/removal/sort step.
   if (!allSettled(state)) return;
 
-  // Remove the first group of N ascending IDs, then relayout and rebuild sort.
-  if (tryRemoveAscendingGroup(state)) {
+  // Remove rectangles using current removal mode, then relayout and rebuild sort.
+  if (tryRemoveRectangles(state)) {
     state.lastStepTime = millis();
     return;
   }
@@ -578,8 +580,14 @@ function drawRelationship(state) {
     let progress = constrain((millis() - state.splitShadowStart) / total, 0, 1);
     let alpha = 20 * (1 - progress);
     let spread = mergeShakeBlurSpread * (1 - progress);
-    let midX = (curvePointForLocalX(state, state.leftX).x + curvePointForLocalX(state, state.rightX).x) * 0.5;
-    let midY = (curvePointForLocalX(state, state.leftX).y + curvePointForLocalX(state, state.rightX).y) * 0.5;
+    let midX =
+      (curvePointForLocalX(state, state.leftX).x +
+        curvePointForLocalX(state, state.rightX).x) *
+      0.5;
+    let midY =
+      (curvePointForLocalX(state, state.leftX).y +
+        curvePointForLocalX(state, state.rightX).y) *
+      0.5;
     noStroke();
     fill(255, 80, 170, alpha);
     circle(midX, midY, state.currentDotSize * 1.1 + spread);
@@ -851,6 +859,13 @@ function buildSwapPlan(ids, algorithm) {
   return swaps;
 }
 
+function tryRemoveRectangles(state) {
+  if (removeMode === "correct_position") {
+    return tryRemoveCorrectPosition(state);
+  }
+  return tryRemoveAscendingGroup(state);
+}
+
 function tryRemoveAscendingGroup(state) {
   let n = max(1, floor(removeGroupSize));
   if (state.rects.length === 0) return false;
@@ -875,6 +890,32 @@ function tryRemoveAscendingGroup(state) {
   }
 
   if (!removedSomething) return false;
+  relayoutRelationship(state);
+  rebuildSortForCurrentOrder(state);
+  return true;
+}
+
+function tryRemoveCorrectPosition(state) {
+  if (state.rects.length === 0) return false;
+
+  // Expected IDs at each index are the sorted remaining IDs.
+  let expected = state.rects
+    .map((r) => r.id)
+    .slice()
+    .sort((a, b) => a - b);
+
+  let kept = [];
+  let removedSomething = false;
+  for (let i = 0; i < state.rects.length; i++) {
+    if (state.rects[i].id === expected[i]) {
+      removedSomething = true;
+    } else {
+      kept.push(state.rects[i]);
+    }
+  }
+
+  if (!removedSomething) return false;
+  state.rects = kept;
   relayoutRelationship(state);
   rebuildSortForCurrentOrder(state);
   return true;
@@ -1014,7 +1055,6 @@ function hashStringToInt(str) {
   }
   return h;
 }
-
 
 function buildGradientTById(rects) {
   let ids = rects
