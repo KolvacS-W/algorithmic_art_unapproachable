@@ -1,144 +1,151 @@
-let sortStepsPerSecond = 10; // Bubble-sort steps per second (adjust this)
-let moveEase = 0.1; // Rectangle movement smoothness/speed (0.05 to 0.4)
-let sortingAlgorithm = "random"; // "random", "bubble", "selection", "insertion"
-let removeGroupSize = 2; // When N consecutive ascending IDs appear, remove them
-let removeMode = "correct_position"; // "group" or "correct_position"
-let noiseSpeedW = 0.1; // Perlin-noise speed for rectangle width
-let noiseSpeedH = 0.1; // Perlin-noise speed for rectangle height
-let noiseAmplitudeW = 0.1; // Width changes around this +/- ratio from average rectWidth
-let noiseAmplitudeH = 0.1; // Height changes around this +/- ratio from average rectHeight
-let dotBeatAmount = 0.45; // Dot pulse strength (heartbeat feel)
-let glowLineThickness = 1.6; // Main white line thickness
-let glowBlurSpread = 24; // Extra blur thickness around the line
-let glowBlurLayers = 16; // Number of blur layers
-let glowCoreAlpha = 0; // Main line transparency
-let glowLayerAlphaMin = 0; // Blur layer min alpha
-let glowLayerAlphaMax = 0; // Blur layer max alpha
-let glowPathSamples = 28; // Number of points used for smooth glow-path interpolation
-let mergedDotColor = "#FF3FA4"; // Pink color after full merge
-let mergePauseMinMs = 900; // Minimum pause time after merge
-let mergePauseMaxMs = 2600; // Maximum pause time after merge
-let mergeShakeMaxOffset = 4; // Max shake offset while merged
-let mergeShakeBlurLayers = 8; // Blurry halo layers for merged dot
-let mergeShakeBlurSpread = 10; // Max blur spread for merged dot
-let splitShadowDurationMs = 320; // Keep a fading pink shadow briefly when split starts
-let mergePinkOnlyThreshold = 0.82; // Switch to only-pink rendering late in merge
-let colorModeOption = "mono"; // "palette" or "mono"
+// Sorting speed in steps per second.
+let sortStepsPerSecond = 10;
+
+// Position easing for dots/rectangles.
+let moveEase = 0.1;
+
+// Sorting algorithm: "random", "bubble", "selection", "insertion".
+let sortingAlgorithm = "random";
+
+// Group size used by "group" removal mode.
+let removeGroupSize = 2;
+
+// Removal mode: "group" (run removal) or "correct_position" (index-correct removal).
+let removeMode = "correct_position";
+
+// Noise speed controls.
+let noiseSpeedW = 0.01;
+let noiseSpeedH = 0.01;
+
+// Noise amplitude controls.
+let noiseAmplitudeW = 0.01;
+let noiseAmplitudeH = 0.01;
+
+// Dot heartbeat strength.
+let dotBeatAmount = 0.45;
+
+// Merge/split style.
+let mergedDotColor = "#FF3FA4";
+let mergePauseMinMs = 900;
+let mergePauseMaxMs = 2600;
+let mergeShakeMaxOffset = 4;
+let mergePinkOnlyThreshold = 0.82;
+
+// Color mode: "mono" or "palette".
+let colorModeOption = "mono";
+
+// Palette used when colorModeOption === "palette".
 const PALETTE = [
-  "#20C4F4", // cyan
-  "#FF1D8E", // magenta
-  "#FFD11A", // yellow
-  "#00A651", // green
-  "#3050F8", // blue
-  "#0F1020", // deep navy
+  "#20C4F4",
+  "#FF1D8E",
+  "#FFD11A",
+  "#00A651",
+  "#3050F8",
+  "#0F1020",
 ];
 
-let relationshipStates = {};
-let relationshipLayout = null;
+// Number of x-samples used to build smooth bar curves.
 let curveSampleCount = 180;
 
+// Runtime state.
+let relationshipLayout = null;
+let relationshipStates = {};
+
 function setup() {
+  // Create canvas.
   createCanvas(800, 600);
 }
 
 function draw() {
-  if (colorModeOption === "mono") {
-    background("black");
-  } else {
-    background("#e6e6e8");
+  // Draw background based on color mode.
+  background(colorModeOption === "mono" ? "black" : "#e6e6e8");
+
+  // Ensure layout exists for current canvas size.
+  ensureLayout();
+
+  // Update and draw every relationship cell.
+  for (let item of relationshipLayout.items) {
+    let ay = sampleCurveAtX(
+      relationshipLayout.centerCurves[item.barIndex],
+      relationshipLayout.x0,
+      relationshipLayout.x1,
+      item.ax,
+    );
+    let by = sampleCurveAtX(
+      relationshipLayout.centerCurves[item.barIndex],
+      relationshipLayout.x0,
+      relationshipLayout.x1,
+      item.bx,
+    );
+
+    updateAndDrawRelationship(item, ay, by);
   }
-  drawRelationshipBars();
 }
 
-// Randomly split the canvas into horizontal bars; split each bar vertically.
-// Each cell gets one fitted relationship.
-function drawRelationshipBars() {
+function ensureLayout() {
+  // Rebuild layout when missing or canvas size changed.
   if (
     !relationshipLayout ||
     relationshipLayout.canvasW !== width ||
     relationshipLayout.canvasH !== height
   ) {
-    relationshipLayout = buildRelationshipBarLayout();
+    relationshipLayout = buildCurvedBarLayout();
     relationshipStates = {};
-  }
-
-  for (let item of relationshipLayout.items) {
-    let ay = sampleBoundaryCurve(
-      relationshipLayout.centerCurves[item.barIndex],
-      relationshipLayout.x0,
-      relationshipLayout.x1,
-      item.ax,
-    );
-    let by = sampleBoundaryCurve(
-      relationshipLayout.centerCurves[item.barIndex],
-      relationshipLayout.x0,
-      relationshipLayout.x1,
-      item.bx,
-    );
-
-    createrelationship(
-      item.id,
-      item.ax,
-      ay,
-      item.bx,
-      by,
-      item.rectWidth,
-      item.rectHeight,
-      item.numRects,
-      item,
-    );
   }
 }
 
-function buildRelationshipBarLayout() {
-  let margin = min(width, height) * 0.04;
-  let x0 = margin;
-  let x1 = width - margin;
-  let y0 = margin;
-  let y1 = height - margin;
-  let innerW = x1 - x0;
-  let innerH = y1 - y0;
+function buildCurvedBarLayout() {
+  // Define inner drawing box.
+  let margin = min(width, height) * 0.04; // outer padding around all bars
+  let x0 = margin; // left x of inner area
+  let x1 = width - margin; // right x of inner area
+  let y0 = margin; // top y of inner area
+  let y1 = height - margin; // bottom y of inner area
+  let innerW = x1 - x0; // usable width for all columns
+  let innerH = y1 - y0; // usable height for all bars
 
-  let barCount = floor(random(5, 9));
-  let minBarH = max(42, innerH * 0.08);
-  let maxBarH = innerH * 0.28;
-  let barHeights = randomPartition(innerH, barCount, minBarH, maxBarH);
+  // Randomly choose number of bars and each base height.
+  let barCount = floor(random(5, 9)); // number of horizontal curved bands
+  let minBarH = max(42, innerH * 0.08); // minimum base bar height
+  let maxBarH = innerH * 0.28; // maximum base bar height
+  let barBaseHeights = randomPartition(innerH, barCount, minBarH, maxBarH); // base heights before wave modulation
 
-  // Build non-overlapping smooth curved boundaries for bars.
-  let gapProfiles = [];
-  for (let b = 0; b < barCount; b++) {
-    gapProfiles.push({
-      base: barHeights[b],
-      a1: random(0.12, 0.33),
-      a2: random(0.05, 0.16),
-      f1: random(0.8, 1.8),
-      f2: random(1.8, 3.7),
-      p1: random(TWO_PI),
-      p2: random(TWO_PI),
+  // Build random modulation profile per bar so boundaries are smooth and organic.
+  let profiles = [];
+  for (let i = 0; i < barCount; i++) {
+    profiles.push({
+      base: barBaseHeights[i], // average gap/height for this band
+      a1: random(0.12, 0.33), // amplitude of first sine wave (strength of bend)
+      a2: random(0.05, 0.16), // amplitude of second sine wave (fine variation)
+      f1: random(0.8, 1.8), // frequency of first sine wave (how many bends)
+      f2: random(1.8, 3.7), // frequency of second sine wave
+      p1: random(TWO_PI), // phase offset of first sine (horizontal shift)
+      p2: random(TWO_PI), // phase offset of second sine
     });
   }
 
-  let minGap = max(26, innerH * 0.04);
-  let boundaries = [];
-  for (let k = 0; k <= barCount; k++) boundaries.push([]);
+  // Build non-overlapping boundaries by normalizing gaps at each sample x.
+  let minGap = max(26, innerH * 0.04); // safety thickness so bands never collapse
+  let boundaries = Array.from({ length: barCount + 1 }, () => []); // y-curves for top/bottom boundaries
 
   for (let s = 0; s < curveSampleCount; s++) {
-    let t = s / (curveSampleCount - 1);
-    let gaps = [];
-    let totalGaps = 0;
+    let t = s / (curveSampleCount - 1); // normalized x sample in [0,1]
+    let gaps = []; // bar heights at this x sample
+    let total = 0; // sum of all gaps at this x sample
+
     for (let b = 0; b < barCount; b++) {
-      let p = gapProfiles[b];
-      let mod =
+      let p = profiles[b]; // shorthand for this band profile
+      let modulation =
         1 +
         p.a1 * sin(TWO_PI * p.f1 * t + p.p1) +
         p.a2 * sin(TWO_PI * p.f2 * t + p.p2);
-      let g = max(minGap, p.base * mod);
-      gaps.push(g);
-      totalGaps += g;
+      let gap = max(minGap, p.base * modulation); // final local band thickness
+      gaps.push(gap);
+      total += gap;
     }
 
-    let scale = innerH / totalGaps;
-    let yCursor = y0;
+    let scale = innerH / total; // normalize so all gaps exactly fill innerH
+    let yCursor = y0; // running y while stacking boundaries top->bottom
     boundaries[0][s] = yCursor;
     for (let b = 0; b < barCount; b++) {
       yCursor += gaps[b] * scale;
@@ -146,42 +153,49 @@ function buildRelationshipBarLayout() {
     }
   }
 
+  // Build center curve for each bar.
   let centerCurves = [];
   for (let b = 0; b < barCount; b++) {
-    let curve = [];
+    let center = []; // center line of bar b
     for (let s = 0; s < curveSampleCount; s++) {
-      curve.push((boundaries[b][s] + boundaries[b + 1][s]) * 0.5);
+      center.push((boundaries[b][s] + boundaries[b + 1][s]) * 0.5);
     }
-    centerCurves.push(curve);
+    centerCurves.push(center);
   }
 
+  // Split each bar into random vertical cells and create one relationship per cell.
   let items = [];
   for (let b = 0; b < barCount; b++) {
-    let colCount = floor(random(2, 5));
-    let minCellW = max(70, innerW * 0.09);
-    let maxCellW = innerW * 0.45;
-    let colWidths = randomPartition(innerW, colCount, minCellW, maxCellW);
+    let cols = floor(random(2, 5)); // number of vertical cells in this bar
+    let minCellW = max(70, innerW * 0.09); // min cell width
+    let maxCellW = innerW * 0.45; // max cell width
+    let colWidths = randomPartition(innerW, cols, minCellW, maxCellW); // random column widths
 
-    let x = x0;
+    let x = x0; // running x while placing cells left->right
     for (let c = 0; c < colWidths.length; c++) {
-      let cellW = colWidths[c];
-      let cellX0 = x;
-      let cellX1 = x + cellW;
-      let edgePad = min(18, cellW * 0.12);
-      let ax = cellX0 + edgePad;
-      let bx = cellX1 - edgePad;
+      let w = colWidths[c]; // current cell width
+      let xL = x; // cell left x
+      let xR = x + w; // cell right x
 
+      // Keep dots away from cell edges.
+      let edgePad = min(18, w * 0.12); // inset so endpoint dots are not on borders
+      let ax = xL + edgePad; // left dot anchor x
+      let bx = xR - edgePad; // right dot anchor x
+
+      // Skip too-small cells.
       if (bx - ax > 24) {
-        let barMidX = (ax + bx) * 0.5;
-        let topY = sampleBoundaryCurve(boundaries[b], x0, x1, barMidX);
-        let bottomY = sampleBoundaryCurve(boundaries[b + 1], x0, x1, barMidX);
-        let bandH = max(12, bottomY - topY);
+        // Estimate bar thickness at cell middle for initial rectangle sizing.
+        let midX = (ax + bx) * 0.5; // sample x at center of this relationship
+        let topY = sampleCurveAtX(boundaries[b], x0, x1, midX); // top boundary y at midX
+        let botY = sampleCurveAtX(boundaries[b + 1], x0, x1, midX); // bottom boundary y at midX
+        let bandH = max(12, botY - topY); // local bar thickness at this cell
+
         let rectHeight = constrain(bandH * 0.56, 12, bandH * 0.9);
         let rectWidth = constrain(rectHeight * random(0.14, 0.24), 3, 14);
         let numRects = floor(random(10, 25));
 
         items.push({
-          id: "bar_" + b + "_cell_" + c,
+          id: `bar_${b}_cell_${c}`,
           barIndex: b,
           ax: ax,
           bx: bx,
@@ -190,10 +204,11 @@ function buildRelationshipBarLayout() {
           numRects: numRects,
         });
       }
-      x += cellW;
+      x += w;
     }
   }
 
+  // Return all layout information.
   return {
     canvasW: width,
     canvasH: height,
@@ -206,129 +221,127 @@ function buildRelationshipBarLayout() {
 }
 
 function randomPartition(total, count, minSize, maxSize) {
-  let sizes = [];
-  let remaining = total;
-  let remainingParts = count;
+  // Split a total length into random pieces with min/max constraints.
+  let sizes = []; // output piece sizes
+  let remaining = total; // still-unassigned length
+  let remainingParts = count; // pieces left to create
 
   for (let i = 0; i < count - 1; i++) {
-    let minAllowed = max(minSize, remaining - maxSize * (remainingParts - 1));
-    let maxAllowed = min(maxSize, remaining - minSize * (remainingParts - 1));
-    let size = random(minAllowed, maxAllowed);
+    let minAllowed = max(minSize, remaining - maxSize * (remainingParts - 1)); // keep future pieces feasible
+    let maxAllowed = min(maxSize, remaining - minSize * (remainingParts - 1)); // keep future pieces feasible
+    let size = random(minAllowed, maxAllowed); // sample current piece size
     sizes.push(size);
     remaining -= size;
     remainingParts--;
   }
+
   sizes.push(remaining);
   return sizes;
 }
 
-function sampleBoundaryCurve(curve, x0, x1, x) {
-  let t = constrain((x - x0) / max(1e-6, x1 - x0), 0, 1);
-  let idx = t * (curve.length - 1);
-  let i0 = floor(idx);
-  let i1 = min(curve.length - 1, i0 + 1);
-  let f = idx - i0;
+function sampleCurveAtX(curve, x0, x1, x) {
+  // Sample a 1D curve array at world x using linear interpolation.
+  let t = constrain((x - x0) / max(1e-6, x1 - x0), 0, 1); // normalized x in [0,1]
+  let idx = t * (curve.length - 1); // floating array index
+  let i0 = floor(idx); // left integer sample index
+  let i1 = min(curve.length - 1, i0 + 1); // right integer sample index
+  let f = idx - i0; // blend factor between i0 and i1
   return lerp(curve[i0], curve[i1], f);
 }
 
-// Creates and animates one relationship between dot A(ax, ay) and dot B(bx, by).
-function createrelationship(
-  id,
-  ax,
-  ay,
-  bx,
-  by,
-  rectWidth = 24,
-  rectHeight = 100,
-  numRects = 8,
-  layoutItem = null,
-) {
-  let dx = bx - ax;
-  let dy = by - ay;
-  let w = dist(ax, ay, bx, by);
-  let angle = atan2(dy, dx);
-  let worldX = (ax + bx) * 0.5;
-  let worldY = (ay + by) * 0.5;
+function updateAndDrawRelationship(item, ay, by) {
+  // Compute relationship axis info.
+  let w = dist(item.ax, ay, item.bx, by);
 
+  // Build a state key so geometry/config changes recreate state.
   let key = [
-    id,
+    item.id,
     w,
-    rectWidth,
-    rectHeight,
-    numRects,
+    item.rectWidth,
+    item.rectHeight,
+    item.numRects,
     sortingAlgorithm,
     removeGroupSize,
     removeMode,
     colorModeOption,
-  ].join("_");
+  ].join("|");
 
-  if (!relationshipStates[id] || relationshipStates[id].key !== key) {
-    relationshipStates[id] = makeRelationshipState(
+  // Create relationship state when needed.
+  if (!relationshipStates[item.id] || relationshipStates[item.id].key !== key) {
+    relationshipStates[item.id] = createRelationshipState(
       key,
-      id,
+      item,
       w,
-      rectWidth,
-      rectHeight,
-      numRects,
+      item.rectWidth,
+      item.rectHeight,
+      item.numRects,
     );
   }
 
-  let state = relationshipStates[id];
-  state.worldX = worldX;
-  state.worldY = worldY;
-  state.angle = angle;
-  state.ax = ax;
-  state.ay = ay;
-  state.bx = bx;
-  state.by = by;
-  state.layoutItem = layoutItem;
+  // Update dynamic anchors each frame.
+  let state = relationshipStates[item.id]; // persistent state object for this relationship id
+  state.ax = item.ax; // world x of left endpoint (dot A)
+  state.ay = ay; // world y of left endpoint sampled from center curve
+  state.bx = item.bx; // world x of right endpoint (dot B)
+  state.by = by; // world y of right endpoint sampled from center curve
+  state.barIndex = item.barIndex; // which curved bar this relationship belongs to
 
+  // Update simulation and render.
   updateRelationship(state);
   drawRelationship(state);
 }
 
-function makeRelationshipState(
+function createRelationshipState(
   key,
-  relationId,
+  item,
   w,
   rectWidth,
   rectHeight,
   numRects,
 ) {
-  let dotSize = max(8, rectHeight * 0.48); // Dot size is proportional to rectangle height.
+  // Dot size scales with base rectangle height.
+  let dotSize = max(8, rectHeight * 0.48);
+
+  // Inner padding between dots and rectangle zone.
   let sidePadding = 24;
 
-  // Local coordinates: relationship center is at x=0, y=0.
+  // Base local coordinates where center is 0.
   let leftX = -w / 2;
   let rightX = w / 2;
 
+  // Calculate available width for rectangles.
   let innerLeft = leftX + dotSize / 2 + sidePadding;
   let innerRight = rightX - dotSize / 2 - sidePadding;
   let available = innerRight - innerLeft;
 
+  // Clamp rectangle count to fit available space.
   let maxFit = max(1, floor(available / rectWidth));
   let count = constrain(floor(numRects), 1, maxFit);
 
+  // Uniform gap between rectangles.
   let gap = count > 1 ? (available - count * rectWidth) / (count - 1) : 0;
+
+  // Build slot x positions.
   let usedWidth = count * rectWidth + (count - 1) * gap;
   let startX = -usedWidth / 2;
-
   let slots = [];
   for (let i = 0; i < count; i++) {
     slots.push(startX + i * (rectWidth + gap));
   }
 
-  // IDs are 1..count. Each ID has a gradient color.
+  // Choose dot colors from mode.
   let dotColorA;
   let dotColorB;
   if (colorModeOption === "mono") {
     dotColorA = color(110);
     dotColorB = color(245);
   } else {
-    let pair = palettePairForId(relationId);
+    let pair = palettePairForId(item.id);
     dotColorA = color(PALETTE[pair[0]]);
     dotColorB = color(PALETTE[pair[1]]);
   }
+
+  // Initialize rectangles with id and noise seeds.
   let rects = [];
   for (let id = 1; id <= count; id++) {
     rects.push({
@@ -342,102 +355,100 @@ function makeRelationshipState(
     });
   }
 
-  // Randomly shuffle rectangle sequence.
+  // Shuffle initial order.
   shuffleArray(rects);
 
-  // Build swap sequence using the chosen sorting algorithm.
+  // Build initial swap plan.
   let activeAlgorithm = resolveSortingAlgorithm(sortingAlgorithm);
-  let startIds = rects.map((r) => r.id);
-  let swapPlan = buildSwapPlan(startIds, activeAlgorithm);
+  let swapPlan = buildSwapPlan(
+    rects.map((r) => r.id),
+    activeAlgorithm,
+  );
 
-  // Start each rectangle at its current slot.
+  // Place rectangles on slots.
   for (let i = 0; i < rects.length; i++) {
     rects[i].x = slots[i];
     rects[i].targetX = slots[i];
   }
 
+  // Return full runtime state.
   return {
     key: key,
-    cx: 0,
-    cy: 0,
-    worldX: 0,
-    worldY: 0,
-    angle: 0,
-    ax: 0,
-    ay: 0,
-    bx: 0,
-    by: 0,
-    layoutItem: null,
-    baseLeftX: leftX,
-    baseRightX: rightX,
-    leftX: leftX,
-    rightX: rightX,
-    targetLeftX: leftX,
-    targetRightX: rightX,
-    dotSize: dotSize,
-    currentDotSize: dotSize,
-    dotColorA: dotColorA,
-    dotColorB: dotColorB,
-    sidePadding: sidePadding,
-    gap: gap,
-    baseCount: count,
-    rectWidth: rectWidth,
-    rectHeight: rectHeight,
-    slots: slots,
-    rects: rects,
-    swapPlan: swapPlan,
-    swapIndex: 0,
-    activeAlgorithm: activeAlgorithm,
-    done: false,
-    merging: false,
-    mergeStartDistance: 0,
-    mergePauseStarted: false,
-    mergePauseStart: 0,
-    mergePauseUntil: 0,
-    mergeChaos: 0,
-    splitShadowStart: 0,
-    splitShadowUntil: 0,
-    glowPoints: [],
-    lastStepTime: millis(),
+    ax: item.ax, // cached left endpoint x in world space
+    ay: 0, // cached left endpoint y in world space (updated every frame)
+    bx: item.bx, // cached right endpoint x in world space
+    by: 0, // cached right endpoint y in world space (updated every frame)
+    barIndex: item.barIndex, // index into relationshipLayout curves
+    baseLeftX: leftX, // original local left-dot x (used for stable normalization)
+    baseRightX: rightX, // original local right-dot x (used for stable normalization)
+    leftX: leftX, // current animated local left-dot x
+    rightX: rightX, // current animated local right-dot x
+    targetLeftX: leftX, // target local left-dot x
+    targetRightX: rightX, // target local right-dot x
+    dotSize: dotSize, // baseline dot diameter
+    currentDotSize: dotSize, // animated dot diameter after heartbeat/merge effects
+    dotColorA: dotColorA, // color of left dot
+    dotColorB: dotColorB, // color of right dot
+    sidePadding: sidePadding, // fixed local padding between dots and rectangle area
+    gap: gap, // spacing between neighboring rectangles
+    baseCount: count, // original rectangle count for respawn
+    rectWidth: rectWidth, // average/base rectangle width
+    rectHeight: rectHeight, // average/base rectangle height
+    slots: slots, // target x slots for rectangle placement
+    rects: rects, // live rectangle objects
+    swapPlan: swapPlan, // precomputed swap steps for current sorting algorithm
+    swapIndex: 0, // next swap step index
+    activeAlgorithm: activeAlgorithm, // resolved algorithm for this cycle
+    done: false, // true when swap plan is finished
+    merging: false, // true after rectangles disappear and dots begin merge
+    mergeStartDistance: 0, // dot distance when merge begins (for normalized progress)
+    mergePauseStarted: false, // true once fully merged and hold phase starts
+    mergePauseStart: 0, // millis timestamp of hold-phase start
+    mergePauseUntil: 0, // millis timestamp when hold phase ends
+    mergeChaos: 0, // 0..1 ramp during hold phase for shake intensity
+    lastStepTime: millis(), // last timestamp used for step-based sorting cadence
   };
 }
 
 function updateRelationship(state) {
-  // Keep targets aligned with slot positions.
+  // Update rectangle target x positions from current slots.
   for (let i = 0; i < state.rects.length; i++) {
     state.rects[i].targetX = state.slots[i];
   }
 
-  let noiseSum = 0;
-
-  // Animate movement for dots and rectangles.
+  // Animate dot spacing toward targets.
   state.leftX = lerp(state.leftX, state.targetLeftX, moveEase);
   state.rightX = lerp(state.rightX, state.targetRightX, moveEase);
+
+  // Accumulate noise metric for heartbeat.
+  let noiseSum = 0;
+
+  // Animate rectangle positions/sizes.
   for (let rectObj of state.rects) {
+    // Move rectangle x toward its slot.
     rectObj.x = lerp(rectObj.x, rectObj.targetX, moveEase);
 
     // Width noise.
     let nW = noise(rectObj.noiseSeedW, frameCount * noiseSpeedW);
-    let nH = noise(rectObj.noiseSeedH, frameCount * noiseSpeedH);
     let ampW = max(0, noiseAmplitudeW);
-    let ampH = max(0, noiseAmplitudeH);
     let widthScale = max(0.1, 1 + ampW * (nW * 2 - 1));
     rectObj.w = state.rectWidth * widthScale;
 
-    // Height follows local curve-band thickness, then adds noise.
+    // Height from local band thickness + noise.
     let centerLocalX = rectObj.x + state.rectWidth * 0.5;
-    let centerPoint = curvePointForLocalX(state, centerLocalX);
-    let bandH = bandHeightAtWorldX(state, centerPoint.x);
+    let centerPt = curvePointForLocalX(state, centerLocalX);
+    let bandH = bandHeightAtWorldX(state, centerPt.x);
     let baseH = max(8, bandH * 0.62);
+
+    let nH = noise(rectObj.noiseSeedH, frameCount * noiseSpeedH);
+    let ampH = max(0, noiseAmplitudeH);
     let heightScale = max(0.1, 1 + ampH * (nH * 2 - 1));
-    let targetH = baseH * heightScale;
-    rectObj.h = lerp(rectObj.h, targetH, 0.22);
+    rectObj.h = lerp(rectObj.h, baseH * heightScale, 0.22);
+
     noiseSum += (nW + nH) * 0.5;
   }
 
-  updateGlowPath(state);
-
-  // Heartbeat-like pulse tied to rectangle noise.
+  // Dot heartbeat driven by rectangle noise.
   let avgNoise = state.rects.length > 0 ? noiseSum / state.rects.length : 0.5;
   let beatSpeed = lerp(0.18, 0.34, avgNoise);
   let beatPhase = frameCount * beatSpeed + avgNoise * TWO_PI * 2.0;
@@ -445,414 +456,273 @@ function updateRelationship(state) {
   let targetDotSize = state.dotSize * (1 + dotBeatAmount * beatShape);
   state.currentDotSize = lerp(state.currentDotSize, targetDotSize, 0.25);
 
-  // If all rectangles are gone, merge dots into one, pause, then respawn.
+  // Handle merge/pause/respawn phase when no rectangles remain.
   if (state.rects.length === 0) {
-    if (!state.merging) {
-      state.merging = true;
-      state.mergeStartDistance = max(1, abs(state.rightX - state.leftX));
-      state.targetLeftX = state.cx;
-      state.targetRightX = state.cx;
-      state.mergePauseStarted = false;
-      state.mergePauseStart = 0;
-      state.mergePauseUntil = 0;
-      state.mergeChaos = 0;
-    }
-
-    // Hold a strong, steady merged-dot presence during pause.
-    state.currentDotSize = lerp(
-      state.currentDotSize,
-      state.dotSize * 1.12,
-      0.2,
-    );
-
-    let mergedDistance = abs(state.rightX - state.leftX);
-    if (!state.mergePauseStarted && mergedDistance < 0.8) {
-      state.mergePauseStarted = true;
-      state.mergePauseStart = millis();
-      state.mergePauseUntil =
-        millis() + random(mergePauseMinMs, mergePauseMaxMs);
-      // Snap exactly to center once merged to avoid sub-pixel ghosting.
-      state.leftX = state.cx;
-      state.rightX = state.cx;
-    }
-
-    if (state.mergePauseStarted) {
-      let total = max(1, state.mergePauseUntil - state.mergePauseStart);
-      let elapsed = millis() - state.mergePauseStart;
-      state.mergeChaos = constrain(elapsed / total, 0, 1);
-    } else {
-      state.mergeChaos = 0;
-    }
-
-    // Strong pause as one dot before restarting.
-    if (state.mergePauseStarted && millis() >= state.mergePauseUntil) {
-      respawnRectangles(state);
-    }
+    updateMergePhase(state);
     return;
   }
 
-  // Wait until everything settles before update/removal/sort step.
+  // Sort only when all moving elements have settled.
   if (!allSettled(state)) return;
 
-  // Remove rectangles using current removal mode, then relayout and rebuild sort.
+  // Try rectangle removal according to current mode.
   if (tryRemoveRectangles(state)) {
     state.lastStepTime = millis();
     return;
   }
 
+  // Stop if current set already sorted and no more swaps.
   if (state.done) return;
 
-  // Adjustable sorting speed.
+  // Apply sort step at configured cadence.
   let stepDelayMs = 1000 / max(0.1, sortStepsPerSecond);
   if (millis() - state.lastStepTime < stepDelayMs) return;
   state.lastStepTime = millis();
 
+  // Finish when swap plan consumed.
   if (state.swapIndex >= state.swapPlan.length) {
     state.done = true;
     return;
   }
 
-  // Apply one swap from the precomputed plan.
+  // Execute one swap.
   let pair = state.swapPlan[state.swapIndex];
   let a = pair[0];
   let b = pair[1];
-  let temp = state.rects[a];
+  let tmp = state.rects[a];
   state.rects[a] = state.rects[b];
-  state.rects[b] = temp;
+  state.rects[b] = tmp;
   state.swapIndex++;
 }
 
-function drawRelationship(state) {
-  // Draw glow line first so it appears behind rectangles and dots.
-  if (state.rects.length > 0) {
-    drawGlowLine(state);
+function updateMergePhase(state) {
+  // Initialize merge phase once.
+  if (!state.merging) {
+    state.merging = true;
+    state.mergeStartDistance = max(1, abs(state.rightX - state.leftX));
+    state.targetLeftX = 0;
+    state.targetRightX = 0;
+    state.mergePauseStarted = false;
+    state.mergePauseStart = 0;
+    state.mergePauseUntil = 0;
+    state.mergeChaos = 0;
   }
+
+  // Hold a slightly larger dot while merged.
+  state.currentDotSize = lerp(state.currentDotSize, state.dotSize * 1.12, 0.2);
+
+  // Start pause when fully merged.
+  let mergedDistance = abs(state.rightX - state.leftX);
+  if (!state.mergePauseStarted && mergedDistance < 0.8) {
+    state.mergePauseStarted = true;
+    state.mergePauseStart = millis();
+    state.mergePauseUntil = millis() + random(mergePauseMinMs, mergePauseMaxMs);
+    state.leftX = 0;
+    state.rightX = 0;
+  }
+
+  // Increase chaos during pause.
+  if (state.mergePauseStarted) {
+    let total = max(1, state.mergePauseUntil - state.mergePauseStart);
+    let elapsed = millis() - state.mergePauseStart;
+    state.mergeChaos = constrain(elapsed / total, 0, 1);
+  } else {
+    state.mergeChaos = 0;
+  }
+
+  // Respawn when pause is over.
+  if (state.mergePauseStarted && millis() >= state.mergePauseUntil) {
+    respawnRectangles(state);
+  }
+}
+
+function drawRelationship(state) {
   noStroke();
 
-  // Dots
+  // Draw merged phase.
   if (state.rects.length === 0) {
-    let leftPoint = curvePointForLocalX(state, state.leftX);
-    let rightPoint = curvePointForLocalX(state, state.rightX);
-    let mergedLocalX = (state.leftX + state.rightX) * 0.5;
-    let mergedPoint = curvePointForLocalX(state, mergedLocalX);
-    let mergedSize = state.currentDotSize * 1.12;
-    let d = dist(leftPoint.x, leftPoint.y, rightPoint.x, rightPoint.y);
-    let mergeT = 1 - d / max(1, state.mergeStartDistance);
-    mergeT = constrain(mergeT, 0, 1);
-    let chaos = pow(state.mergeChaos, 1.35);
-    let shakeAmp = lerp(0.2, mergeShakeMaxOffset, chaos);
-    let shakeFreq = lerp(0.2, 1.6, chaos);
-    let jx = sin(frameCount * shakeFreq * 0.73 + state.dotSize) * shakeAmp;
-    let jy =
-      cos(frameCount * shakeFreq * 0.91 + state.dotSize * 0.37) * shakeAmp;
-    let x = mergedPoint.x + jx;
-    let y = mergedPoint.y + jy;
-
-    // Remove overlap ghosts: either draw 2 dots OR pink dot, not both.
-    if (mergeT < mergePinkOnlyThreshold) {
-      fill(state.dotColorA);
-      circle(leftPoint.x, leftPoint.y, state.currentDotSize);
-      fill(state.dotColorB);
-      circle(rightPoint.x, rightPoint.y, state.currentDotSize);
-    } else {
-      // Only add blur after full merge pause starts.
-      if (state.mergePauseStarted) {
-        noStroke();
-        for (let i = mergeShakeBlurLayers; i >= 1; i--) {
-          let t = i / mergeShakeBlurLayers;
-          let spread = mergeShakeBlurSpread * chaos * t;
-          let a = lerp(2, 22, chaos) * t;
-          fill(255, 80, 170, a);
-          circle(x, y, mergedSize + spread);
-        }
-      }
-
-      fill(mergedDotColor);
-      circle(x, y, mergedSize);
-    }
-
+    drawMergedDots(state);
     return;
   }
 
-  // During split start, keep a brief fading pink shadow so transition is continuous.
-  if (millis() < state.splitShadowUntil) {
-    let total = max(1, state.splitShadowUntil - state.splitShadowStart);
-    let progress = constrain((millis() - state.splitShadowStart) / total, 0, 1);
-    let alpha = 20 * (1 - progress);
-    let spread = mergeShakeBlurSpread * (1 - progress);
-    let midX =
-      (curvePointForLocalX(state, state.leftX).x +
-        curvePointForLocalX(state, state.rightX).x) *
-      0.5;
-    let midY =
-      (curvePointForLocalX(state, state.leftX).y +
-        curvePointForLocalX(state, state.rightX).y) *
-      0.5;
-    noStroke();
-    fill(255, 80, 170, alpha);
-    circle(midX, midY, state.currentDotSize * 1.1 + spread);
-  }
-
-  let leftPoint = curvePointForLocalX(state, state.leftX);
-  let rightPoint = curvePointForLocalX(state, state.rightX);
+  // Draw two endpoint dots.
+  let leftPt = curvePointForLocalX(state, state.leftX);
+  let rightPt = curvePointForLocalX(state, state.rightX);
   fill(state.dotColorA);
-  circle(leftPoint.x, leftPoint.y, state.currentDotSize);
+  circle(leftPt.x, leftPt.y, state.currentDotSize);
   fill(state.dotColorB);
-  circle(rightPoint.x, rightPoint.y, state.currentDotSize);
+  circle(rightPt.x, rightPt.y, state.currentDotSize);
 
-  // Rectangles
+  // Draw rectangles.
   rectMode(CENTER);
-  let gradientTById = buildGradientTById(state.rects);
+  let gradientById = buildGradientTById(state.rects);
   for (let rectObj of state.rects) {
-    let slotCenterLocalX = rectObj.x + state.rectWidth / 2;
-    let centerPoint = curvePointForLocalX(state, slotCenterLocalX);
-    let t = gradientTById[rectObj.id];
+    let centerLocalX = rectObj.x + state.rectWidth / 2;
+    let centerPt = curvePointForLocalX(state, centerLocalX);
+    let t = gradientById[rectObj.id];
     fill(lerpColor(state.dotColorA, state.dotColorB, t));
-    // Keep rectangles vertically oriented; only their center and height follow curve.
-    rect(centerPoint.x, centerPoint.y, rectObj.w, rectObj.h);
+    rect(centerPt.x, centerPt.y, rectObj.w, rectObj.h);
   }
 }
 
-function drawGlowLine(state) {
-  let points =
-    state.glowPoints.length > 1 ? state.glowPoints : getGlowLinePoints(state);
-  if (points.length < 2) return;
+function drawMergedDots(state) {
+  // Compute points for merge animation.
+  let leftPt = curvePointForLocalX(state, state.leftX);
+  let rightPt = curvePointForLocalX(state, state.rightX);
+  let mergedLocalX = (state.leftX + state.rightX) * 0.5;
+  let mergedPt = curvePointForLocalX(state, mergedLocalX);
 
-  noFill();
-  strokeCap(ROUND);
-  strokeJoin(ROUND);
-  curveTightness(-0.35);
+  // Compute merge progress based on dot distance.
+  let d = dist(leftPt.x, leftPt.y, rightPt.x, rightPt.y);
+  let mergeT = 1 - d / max(1, state.mergeStartDistance);
+  mergeT = constrain(mergeT, 0, 1);
 
-  // Soft blur layers.
-  for (let i = glowBlurLayers; i >= 1; i--) {
-    let t = i / glowBlurLayers;
-    let w = glowLineThickness + glowBlurSpread * pow(t, 1.15);
-    let a = lerp(glowLayerAlphaMin, glowLayerAlphaMax, t);
-    stroke(255, a);
-    strokeWeight(w);
-    drawSmoothPolyline(points);
-  }
+  // Add shake during pause.
+  let chaos = pow(state.mergeChaos, 1.35);
+  let shakeAmp = lerp(0.2, mergeShakeMaxOffset, chaos);
+  let shakeFreq = lerp(0.2, 1.6, chaos);
+  let jx = sin(frameCount * shakeFreq * 0.73 + state.dotSize) * shakeAmp;
+  let jy = cos(frameCount * shakeFreq * 0.91 + state.dotSize * 0.37) * shakeAmp;
+  let x = mergedPt.x + jx;
+  let y = mergedPt.y + jy;
+  let mergedSize = state.currentDotSize * 1.12;
 
-  // Core line.
-  stroke(255, glowCoreAlpha);
-  strokeWeight(glowLineThickness);
-  drawSmoothPolyline(points);
-}
-
-function getGlowLinePoints(state) {
-  let points = [];
-  points.push(curvePointForLocalX(state, state.leftX));
-
-  // Follow the current middle points of rectangles, from left to right.
-  let mids = [];
-  for (let rectObj of state.rects) {
-    let localX = rectObj.x + state.rectWidth / 2;
-    let p = curvePointForLocalX(state, localX);
-    mids.push({
-      x: p.x,
-      y: p.y,
-    });
-  }
-  mids.sort((a, b) => a.x - b.x);
-  for (let p of mids) points.push(p);
-
-  points.push(curvePointForLocalX(state, state.rightX));
-  return points;
-}
-
-function updateGlowPath(state) {
-  let control = getGlowLinePoints(state);
-  let target = resamplePolyline(control, glowPathSamples);
-  if (target.length < 2) return;
-
-  // When rectangles are gone, avoid path-lag trails ("afterimage").
-  if (state.rects.length === 0) {
-    state.glowPoints = target.map((p) => ({ x: p.x, y: p.y }));
+  // Avoid ghost overlap: draw either split dots or pink dot.
+  if (mergeT < mergePinkOnlyThreshold) {
+    fill(state.dotColorA);
+    circle(leftPt.x, leftPt.y, state.currentDotSize);
+    fill(state.dotColorB);
+    circle(rightPt.x, rightPt.y, state.currentDotSize);
     return;
   }
 
-  if (state.glowPoints.length !== target.length) {
-    state.glowPoints = target.map((p) => ({ x: p.x, y: p.y }));
-    return;
-  }
-
-  for (let i = 0; i < target.length; i++) {
-    state.glowPoints[i].x = lerp(state.glowPoints[i].x, target[i].x, 0.22);
-    state.glowPoints[i].y = lerp(state.glowPoints[i].y, target[i].y, 0.22);
-  }
-}
-
-function resamplePolyline(points, sampleCount) {
-  if (points.length < 2) return points.slice();
-  let dists = [0];
-  for (let i = 1; i < points.length; i++) {
-    let dx = points[i].x - points[i - 1].x;
-    let dy = points[i].y - points[i - 1].y;
-    dists.push(dists[i - 1] + sqrt(dx * dx + dy * dy));
-  }
-
-  let total = dists[dists.length - 1];
-  if (total < 1e-6) return points.slice();
-
-  let out = [];
-  for (let s = 0; s < sampleCount; s++) {
-    let target = (s / (sampleCount - 1)) * total;
-    let idx = 1;
-    while (idx < dists.length && dists[idx] < target) idx++;
-    idx = min(idx, dists.length - 1);
-    let i0 = idx - 1;
-    let i1 = idx;
-    let segLen = max(1e-6, dists[i1] - dists[i0]);
-    let t = (target - dists[i0]) / segLen;
-    out.push({
-      x: lerp(points[i0].x, points[i1].x, t),
-      y: lerp(points[i0].y, points[i1].y, t),
-    });
-  }
-  return out;
-}
-
-function drawSmoothPolyline(points) {
-  beginShape();
-  curveVertex(points[0].x, points[0].y);
-  for (let p of points) {
-    curveVertex(p.x, p.y);
-  }
-  let last = points[points.length - 1];
-  curveVertex(last.x, last.y);
-  endShape();
+  // Draw merged pink dot.
+  fill(mergedDotColor);
+  circle(x, y, mergedSize);
 }
 
 function curvePointForLocalX(state, localX) {
-  // Use the original span so shrinking leftX/rightX truly moves dots inward on curve.
-  let denom = state.baseRightX - state.baseLeftX;
-  let t = abs(denom) < 1e-6 ? 0.5 : (localX - state.baseLeftX) / denom;
+  // Map local x to normalized t based on original full span.
+  let denom = state.baseRightX - state.baseLeftX; // total original local span between the two dots
+  let t = abs(denom) < 1e-6 ? 0.5 : (localX - state.baseLeftX) / denom; // normalized position along span
   t = constrain(t, 0, 1);
 
-  let x = lerp(state.ax, state.bx, t);
-  let y = lerp(state.ay, state.by, t);
+  // Base point on dot axis.
+  let x = lerp(state.ax, state.bx, t); // world x between endpoints A->B
+  let y = lerp(state.ay, state.by, t); // linear y between endpoints A->B (fallback)
 
-  if (state.layoutItem && relationshipLayout) {
-    let curve = relationshipLayout.centerCurves[state.layoutItem.barIndex];
-    y = sampleBoundaryCurve(
-      curve,
+  // Override y by bar center curve for this relationship.
+  if (
+    relationshipLayout &&
+    state.barIndex !== null &&
+    state.barIndex !== undefined
+  ) {
+    y = sampleCurveAtX(
+      relationshipLayout.centerCurves[state.barIndex],
       relationshipLayout.x0,
       relationshipLayout.x1,
       x,
     );
   }
+
   return { x: x, y: y };
 }
 
 function bandHeightAtWorldX(state, x) {
-  if (!state.layoutItem || !relationshipLayout) return state.rectHeight / 0.62;
-  let bar = state.layoutItem.barIndex;
-  let top = sampleBoundaryCurve(
-    relationshipLayout.boundaries[bar],
-    relationshipLayout.x0,
-    relationshipLayout.x1,
-    x,
-  );
-  let bottom = sampleBoundaryCurve(
-    relationshipLayout.boundaries[bar + 1],
-    relationshipLayout.x0,
-    relationshipLayout.x1,
-    x,
-  );
-  return max(8, bottom - top);
-}
-
-function curveTangentAngleAtWorldX(state, x) {
-  if (!state.layoutItem || !relationshipLayout) {
-    return atan2(state.by - state.ay, state.bx - state.ax);
+  // Fallback if layout unavailable.
+  if (
+    !relationshipLayout ||
+    state.barIndex === null ||
+    state.barIndex === undefined
+  ) {
+    return state.rectHeight / 0.62;
   }
-  let eps = 2.0;
-  let curve = relationshipLayout.centerCurves[state.layoutItem.barIndex];
-  let yL = sampleBoundaryCurve(
-    curve,
+
+  // Sample top and bottom boundaries at x.
+  let top = sampleCurveAtX(
+    relationshipLayout.boundaries[state.barIndex],
     relationshipLayout.x0,
     relationshipLayout.x1,
-    x - eps,
+    x,
   );
-  let yR = sampleBoundaryCurve(
-    curve,
+  let bottom = sampleCurveAtX(
+    relationshipLayout.boundaries[state.barIndex + 1],
     relationshipLayout.x0,
     relationshipLayout.x1,
-    x + eps,
+    x,
   );
-  return atan2(yR - yL, 2 * eps);
+
+  return max(8, bottom - top); // local curved bar thickness at x
 }
 
 function allRectsSettled(rects) {
+  // True when all rectangle x positions are near targets.
   for (let rectObj of rects) {
-    if (abs(rectObj.x - rectObj.targetX) > 0.5) {
-      return false;
-    }
+    if (abs(rectObj.x - rectObj.targetX) > 0.5) return false;
   }
   return true;
 }
 
 function allSettled(state) {
+  // True when dots and rectangles are all near targets.
   if (abs(state.leftX - state.targetLeftX) > 0.5) return false;
   if (abs(state.rightX - state.targetRightX) > 0.5) return false;
   return allRectsSettled(state.rects);
 }
 
 function shuffleArray(arr) {
+  // Fisher-Yates shuffle.
   for (let i = arr.length - 1; i > 0; i--) {
     let j = floor(random(i + 1));
-    let temp = arr[i];
+    let tmp = arr[i];
     arr[i] = arr[j];
-    arr[j] = temp;
+    arr[j] = tmp;
   }
 }
 
 function buildSwapPlan(ids, algorithm) {
+  // Build swap operations for selected sorting algorithm.
   let arr = ids.slice();
   let swaps = [];
 
   if (algorithm === "selection") {
-    // Selection sort: typically one swap per pass.
     for (let i = 0; i < arr.length - 1; i++) {
       let minIndex = i;
       for (let j = i + 1; j < arr.length; j++) {
-        if (arr[j] < arr[minIndex]) {
-          minIndex = j;
-        }
+        if (arr[j] < arr[minIndex]) minIndex = j;
       }
       if (minIndex !== i) {
         swaps.push([i, minIndex]);
-        let temp = arr[i];
+        let tmp = arr[i];
         arr[i] = arr[minIndex];
-        arr[minIndex] = temp;
+        arr[minIndex] = tmp;
       }
     }
     return swaps;
   }
 
   if (algorithm === "insertion") {
-    // Insertion sort: move each value left via adjacent swaps.
     for (let i = 1; i < arr.length; i++) {
       let j = i;
       while (j > 0 && arr[j - 1] > arr[j]) {
         swaps.push([j - 1, j]);
-        let temp = arr[j - 1];
+        let tmp = arr[j - 1];
         arr[j - 1] = arr[j];
-        arr[j] = temp;
+        arr[j] = tmp;
         j--;
       }
     }
     return swaps;
   }
 
-  // Default: bubble sort.
+  // Default bubble sort.
   for (let pass = 0; pass < arr.length - 1; pass++) {
     for (let i = 0; i < arr.length - 1 - pass; i++) {
       if (arr[i] > arr[i + 1]) {
         swaps.push([i, i + 1]);
-        let temp = arr[i];
+        let tmp = arr[i];
         arr[i] = arr[i + 1];
-        arr[i + 1] = temp;
+        arr[i + 1] = tmp;
       }
     }
   }
@@ -860,61 +730,61 @@ function buildSwapPlan(ids, algorithm) {
 }
 
 function tryRemoveRectangles(state) {
-  if (removeMode === "correct_position") {
-    return tryRemoveCorrectPosition(state);
-  }
+  // Dispatch removal strategy.
+  if (removeMode === "correct_position") return tryRemoveCorrectPosition(state);
   return tryRemoveAscendingGroup(state);
 }
 
 function tryRemoveAscendingGroup(state) {
+  // Remove runs of N ascending consecutive remaining IDs.
   let n = max(1, floor(removeGroupSize));
   if (state.rects.length === 0) return false;
 
-  let removedSomething = false;
+  let removed = false;
 
-  // If fewer than N rectangles remain, remove all of them when they are ordered.
+  // For less than N, remove all when ordered.
   if (state.rects.length < n) {
     if (isAscendingConsecutive(state.rects)) {
       state.rects.splice(0, state.rects.length);
-      removedSomething = true;
+      removed = true;
     }
   } else {
-    // Remove any existing run of N consecutive ascending IDs.
-    // Keep scanning until no such run remains.
+    // Repeatedly remove first matching run until none left.
     let start = findAscendingRunStart(state.rects, n);
     while (start >= 0) {
       state.rects.splice(start, n);
-      removedSomething = true;
+      removed = true;
       start = findAscendingRunStart(state.rects, n);
     }
   }
 
-  if (!removedSomething) return false;
+  if (!removed) return false;
   relayoutRelationship(state);
   rebuildSortForCurrentOrder(state);
   return true;
 }
 
 function tryRemoveCorrectPosition(state) {
+  // Remove any rectangle already at its correct index among remaining IDs.
   if (state.rects.length === 0) return false;
 
-  // Expected IDs at each index are the sorted remaining IDs.
   let expected = state.rects
     .map((r) => r.id)
     .slice()
     .sort((a, b) => a - b);
 
   let kept = [];
-  let removedSomething = false;
+  let removed = false;
+
   for (let i = 0; i < state.rects.length; i++) {
     if (state.rects[i].id === expected[i]) {
-      removedSomething = true;
+      removed = true;
     } else {
       kept.push(state.rects[i]);
     }
   }
 
-  if (!removedSomething) return false;
+  if (!removed) return false;
   state.rects = kept;
   relayoutRelationship(state);
   rebuildSortForCurrentOrder(state);
@@ -922,7 +792,9 @@ function tryRemoveCorrectPosition(state) {
 }
 
 function findAscendingRunStart(rects, n) {
+  // Find first index where length-n run follows remaining-id adjacency.
   let nextMap = buildNextRemainingIdMap(rects);
+
   for (let i = 0; i <= rects.length - n; i++) {
     let ok = true;
     for (let k = 1; k < n; k++) {
@@ -935,38 +807,40 @@ function findAscendingRunStart(rects, n) {
     }
     if (ok) return i;
   }
+
   return -1;
 }
 
 function isAscendingConsecutive(rects) {
+  // Check if all remaining rectangles are in ascending remaining-id order.
   if (rects.length <= 1) return rects.length === 1;
+
   let nextMap = buildNextRemainingIdMap(rects);
   for (let i = 1; i < rects.length; i++) {
-    if (nextMap[rects[i - 1].id] !== rects[i].id) {
-      return false;
-    }
+    if (nextMap[rects[i - 1].id] !== rects[i].id) return false;
   }
   return true;
 }
 
 function buildNextRemainingIdMap(rects) {
+  // Build map id -> next higher remaining id.
   let ids = rects
     .map((r) => r.id)
     .slice()
     .sort((a, b) => a - b);
-  let nextMap = {};
+
+  let map = {};
   for (let i = 0; i < ids.length - 1; i++) {
-    nextMap[ids[i]] = ids[i + 1];
+    map[ids[i]] = ids[i + 1];
   }
-  return nextMap;
+  return map;
 }
 
 function relayoutRelationship(state) {
+  // Recompute dot target spacing and rectangle slots after removals.
   let count = state.rects.length;
-  let usedWidth = 0;
-  if (count > 0) {
-    usedWidth = count * state.rectWidth + (count - 1) * state.gap;
-  }
+  let usedWidth =
+    count > 0 ? count * state.rectWidth + (count - 1) * state.gap : 0;
 
   let halfSpan = usedWidth / 2 + state.sidePadding + state.dotSize / 2;
   state.targetLeftX = -halfSpan;
@@ -981,20 +855,24 @@ function relayoutRelationship(state) {
 }
 
 function rebuildSortForCurrentOrder(state) {
-  let ids = state.rects.map((r) => r.id);
-  state.swapPlan = buildSwapPlan(ids, state.activeAlgorithm);
+  // Rebuild swap plan for current remaining IDs.
+  state.swapPlan = buildSwapPlan(
+    state.rects.map((r) => r.id),
+    state.activeAlgorithm,
+  );
   state.swapIndex = 0;
   state.done = state.swapPlan.length === 0;
 }
 
 function respawnRectangles(state) {
+  // Respawn original count with fresh shuffle.
   let count = state.baseCount;
   let rects = [];
 
   for (let id = 1; id <= count; id++) {
     rects.push({
       id: id,
-      x: 0, // Reappear from center (local space)
+      x: 0,
       targetX: 0,
       w: state.rectWidth,
       h: state.rectHeight,
@@ -1006,6 +884,7 @@ function respawnRectangles(state) {
   shuffleArray(rects);
   state.rects = rects;
 
+  // Rebuild slots and target spacing.
   let usedWidth = count * state.rectWidth + (count - 1) * state.gap;
   let startX = -usedWidth / 2;
   state.slots = [];
@@ -1018,6 +897,7 @@ function respawnRectangles(state) {
   state.targetLeftX = -halfSpan;
   state.targetRightX = halfSpan;
 
+  // Rebuild sorting mode/plan and clear merge state.
   state.activeAlgorithm = resolveSortingAlgorithm(sortingAlgorithm);
   rebuildSortForCurrentOrder(state);
   state.merging = false;
@@ -1026,18 +906,19 @@ function respawnRectangles(state) {
   state.mergePauseStart = 0;
   state.mergePauseUntil = 0;
   state.mergeChaos = 0;
-  state.splitShadowStart = millis();
-  state.splitShadowUntil = state.splitShadowStart + splitShadowDurationMs;
+
   state.lastStepTime = millis();
 }
 
 function resolveSortingAlgorithm(algorithm) {
+  // Resolve random algorithm per lifecycle.
   if (algorithm !== "random") return algorithm;
   let options = ["bubble", "selection", "insertion"];
   return random(options);
 }
 
 function palettePairForId(id) {
+  // Deterministic color pair per relationship id.
   let idx = hashStringToInt(id);
   let pairs = [];
   for (let a = 0; a < PALETTE.length; a++) {
@@ -1049,6 +930,7 @@ function palettePairForId(id) {
 }
 
 function hashStringToInt(str) {
+  // Simple unsigned 32-bit string hash.
   let h = 0;
   for (let i = 0; i < str.length; i++) {
     h = (h * 31 + str.charCodeAt(i)) >>> 0;
@@ -1057,6 +939,7 @@ function hashStringToInt(str) {
 }
 
 function buildGradientTById(rects) {
+  // Map each remaining id to a 0..1 gradient value based on sorted order.
   let ids = rects
     .map((r) => r.id)
     .slice()
