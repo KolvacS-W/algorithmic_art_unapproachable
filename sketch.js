@@ -1,5 +1,5 @@
-let sortStepsPerSecond = 20; // Bubble-sort steps per second (adjust this)
-let moveEase = 0.2; // Rectangle movement smoothness/speed (0.05 to 0.4)
+let sortStepsPerSecond = 10; // Bubble-sort steps per second (adjust this)
+let moveEase = 0.1; // Rectangle movement smoothness/speed (0.05 to 0.4)
 let sortingAlgorithm = "random"; // "random", "bubble", "selection", "insertion"
 let removeGroupSize = 2; // When N consecutive ascending IDs appear, remove them
 let noiseSpeedW = 0.01; // Perlin-noise speed for rectangle width
@@ -175,7 +175,7 @@ function buildRelationshipBarLayout() {
         let bandH = max(12, bottomY - topY);
         let rectHeight = constrain(bandH * 0.56, 12, bandH * 0.9);
         let rectWidth = constrain(rectHeight * random(0.14, 0.24), 3, 14);
-        let numRects = floor(random(6, 18));
+        let numRects = floor(random(10, 25));
 
         items.push({
           id: "bar_" + b + "_cell_" + c,
