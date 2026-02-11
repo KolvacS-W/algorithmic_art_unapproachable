@@ -10,9 +10,10 @@ let dotBeatAmount = 0.45; // Dot pulse strength (heartbeat feel)
 let glowLineThickness = 1.6; // Main white line thickness
 let glowBlurSpread = 24; // Extra blur thickness around the line
 let glowBlurLayers = 16; // Number of blur layers
-let glowCoreAlpha = 2; // Main line transparency
-let glowLayerAlphaMin = 1; // Blur layer min alpha
-let glowLayerAlphaMax = 8; // Blur layer max alpha
+let glowCoreAlpha = 0; // Main line transparency
+let glowLayerAlphaMin = 0; // Blur layer min alpha
+let glowLayerAlphaMax = 0; // Blur layer max alpha
+let glowPathSamples = 28; // Number of points used for smooth glow-path interpolation
 let mergedDotColor = "#FF3FA4"; // Pink color after full merge
 let mergePauseMinMs = 900; // Minimum pause time after merge
 let mergePauseMaxMs = 2600; // Maximum pause time after merge
@@ -363,6 +364,8 @@ function makeRelationshipState(
     bx: 0,
     by: 0,
     layoutItem: null,
+    baseLeftX: leftX,
+    baseRightX: rightX,
     leftX: leftX,
     rightX: rightX,
     targetLeftX: leftX,
@@ -387,6 +390,7 @@ function makeRelationshipState(
     mergePauseStart: 0,
     mergePauseUntil: 0,
     mergeChaos: 0,
+    glowPoints: [],
     lastStepTime: millis(),
   };
 }
@@ -423,6 +427,8 @@ function updateRelationship(state) {
     rectObj.h = lerp(rectObj.h, targetH, 0.22);
     noiseSum += (nW + nH) * 0.5;
   }
+
+  updateGlowPath(state);
 
   // Heartbeat-like pulse tied to rectangle noise.
   let avgNoise = state.rects.length > 0 ? noiseSum / state.rects.length : 0.5;
@@ -552,19 +558,16 @@ function drawRelationship(state) {
   for (let rectObj of state.rects) {
     let slotCenterLocalX = rectObj.x + state.rectWidth / 2;
     let centerPoint = curvePointForLocalX(state, slotCenterLocalX);
-    let tangent = curveTangentAngleAtWorldX(state, centerPoint.x);
     let t = gradientTById[rectObj.id];
     fill(lerpColor(state.dotColorA, state.dotColorB, t));
-    push();
-    translate(centerPoint.x, centerPoint.y);
-    rotate(tangent);
-    rect(0, 0, rectObj.w, rectObj.h);
-    pop();
+    // Keep rectangles vertically oriented; only their center and height follow curve.
+    rect(centerPoint.x, centerPoint.y, rectObj.w, rectObj.h);
   }
 }
 
 function drawGlowLine(state) {
-  let points = getGlowLinePoints(state);
+  let points =
+    state.glowPoints.length > 1 ? state.glowPoints : getGlowLinePoints(state);
   if (points.length < 2) return;
 
   noFill();
@@ -609,6 +612,52 @@ function getGlowLinePoints(state) {
   return points;
 }
 
+function updateGlowPath(state) {
+  let control = getGlowLinePoints(state);
+  let target = resamplePolyline(control, glowPathSamples);
+  if (target.length < 2) return;
+
+  if (state.glowPoints.length !== target.length) {
+    state.glowPoints = target.map((p) => ({ x: p.x, y: p.y }));
+    return;
+  }
+
+  for (let i = 0; i < target.length; i++) {
+    state.glowPoints[i].x = lerp(state.glowPoints[i].x, target[i].x, 0.22);
+    state.glowPoints[i].y = lerp(state.glowPoints[i].y, target[i].y, 0.22);
+  }
+}
+
+function resamplePolyline(points, sampleCount) {
+  if (points.length < 2) return points.slice();
+  let dists = [0];
+  for (let i = 1; i < points.length; i++) {
+    let dx = points[i].x - points[i - 1].x;
+    let dy = points[i].y - points[i - 1].y;
+    dists.push(dists[i - 1] + sqrt(dx * dx + dy * dy));
+  }
+
+  let total = dists[dists.length - 1];
+  if (total < 1e-6) return points.slice();
+
+  let out = [];
+  for (let s = 0; s < sampleCount; s++) {
+    let target = (s / (sampleCount - 1)) * total;
+    let idx = 1;
+    while (idx < dists.length && dists[idx] < target) idx++;
+    idx = min(idx, dists.length - 1);
+    let i0 = idx - 1;
+    let i1 = idx;
+    let segLen = max(1e-6, dists[i1] - dists[i0]);
+    let t = (target - dists[i0]) / segLen;
+    out.push({
+      x: lerp(points[i0].x, points[i1].x, t),
+      y: lerp(points[i0].y, points[i1].y, t),
+    });
+  }
+  return out;
+}
+
 function drawSmoothPolyline(points) {
   beginShape();
   curveVertex(points[0].x, points[0].y);
@@ -621,8 +670,9 @@ function drawSmoothPolyline(points) {
 }
 
 function curvePointForLocalX(state, localX) {
-  let denom = state.rightX - state.leftX;
-  let t = abs(denom) < 1e-6 ? 0.5 : (localX - state.leftX) / denom;
+  // Use the original span so shrinking leftX/rightX truly moves dots inward on curve.
+  let denom = state.baseRightX - state.baseLeftX;
+  let t = abs(denom) < 1e-6 ? 0.5 : (localX - state.baseLeftX) / denom;
   t = constrain(t, 0, 1);
 
   let x = lerp(state.ax, state.bx, t);
@@ -630,7 +680,12 @@ function curvePointForLocalX(state, localX) {
 
   if (state.layoutItem && relationshipLayout) {
     let curve = relationshipLayout.centerCurves[state.layoutItem.barIndex];
-    y = sampleBoundaryCurve(curve, relationshipLayout.x0, relationshipLayout.x1, x);
+    y = sampleBoundaryCurve(
+      curve,
+      relationshipLayout.x0,
+      relationshipLayout.x1,
+      x,
+    );
   }
   return { x: x, y: y };
 }
@@ -659,8 +714,18 @@ function curveTangentAngleAtWorldX(state, x) {
   }
   let eps = 2.0;
   let curve = relationshipLayout.centerCurves[state.layoutItem.barIndex];
-  let yL = sampleBoundaryCurve(curve, relationshipLayout.x0, relationshipLayout.x1, x - eps);
-  let yR = sampleBoundaryCurve(curve, relationshipLayout.x0, relationshipLayout.x1, x + eps);
+  let yL = sampleBoundaryCurve(
+    curve,
+    relationshipLayout.x0,
+    relationshipLayout.x1,
+    x - eps,
+  );
+  let yR = sampleBoundaryCurve(
+    curve,
+    relationshipLayout.x0,
+    relationshipLayout.x1,
+    x + eps,
+  );
   return atan2(yR - yL, 2 * eps);
 }
 
