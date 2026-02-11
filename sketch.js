@@ -1,7 +1,7 @@
 let sortStepsPerSecond = 40; // Bubble-sort steps per second (adjust this)
 let moveEase = 0.2; // Rectangle movement smoothness/speed (0.05 to 0.4)
 let sortingAlgorithm = "random"; // "random", "bubble", "selection", "insertion"
-let removeGroupSize = 6; // When N consecutive ascending IDs appear, remove them
+let removeGroupSize = 2; // When N consecutive ascending IDs appear, remove them
 let noiseSpeedW = 0.01; // Perlin-noise speed for rectangle width
 let noiseSpeedH = 0.01; // Perlin-noise speed for rectangle height
 let noiseAmplitudeW = 0.01; // Width changes around this +/- ratio from average rectWidth
@@ -16,6 +16,9 @@ let glowLayerAlphaMax = 8; // Blur layer max alpha
 let mergedDotColor = "#FF3FA4"; // Pink color after full merge
 let mergePauseMinMs = 900; // Minimum pause time after merge
 let mergePauseMaxMs = 2600; // Maximum pause time after merge
+let mergeShakeMaxOffset = 8; // Max shake offset while merged
+let mergeShakeBlurLayers = 8; // Blurry halo layers for merged dot
+let mergeShakeBlurSpread = 26; // Max blur spread for merged dot
 let colorModeOption = "mono"; // "palette" or "mono"
 const PALETTE = [
   "#20C4F4", // cyan
@@ -295,7 +298,9 @@ function makeRelationshipState(
     done: false,
     merging: false,
     mergePauseStarted: false,
+    mergePauseStart: 0,
     mergePauseUntil: 0,
+    mergeChaos: 0,
     lastStepTime: millis(),
   };
 }
@@ -342,16 +347,32 @@ function updateRelationship(state) {
       state.targetLeftX = state.cx;
       state.targetRightX = state.cx;
       state.mergePauseStarted = false;
+      state.mergePauseStart = 0;
       state.mergePauseUntil = 0;
+      state.mergeChaos = 0;
     }
 
     // Hold a strong, steady merged-dot presence during pause.
-    state.currentDotSize = lerp(state.currentDotSize, state.dotSize * 1.12, 0.2);
+    state.currentDotSize = lerp(
+      state.currentDotSize,
+      state.dotSize * 1.12,
+      0.2,
+    );
 
     let mergedDistance = abs(state.rightX - state.leftX);
     if (!state.mergePauseStarted && mergedDistance < 0.8) {
       state.mergePauseStarted = true;
-      state.mergePauseUntil = millis() + random(mergePauseMinMs, mergePauseMaxMs);
+      state.mergePauseStart = millis();
+      state.mergePauseUntil =
+        millis() + random(mergePauseMinMs, mergePauseMaxMs);
+    }
+
+    if (state.mergePauseStarted) {
+      let total = max(1, state.mergePauseUntil - state.mergePauseStart);
+      let elapsed = millis() - state.mergePauseStart;
+      state.mergeChaos = constrain(elapsed / total, 0, 1);
+    } else {
+      state.mergeChaos = 0;
     }
 
     // Strong pause as one dot before restarting.
@@ -403,10 +424,29 @@ function drawRelationship(state) {
 
   // Dots
   if (state.rects.length === 0) {
-    fill(mergedDotColor);
     let mergedX = (state.leftX + state.rightX) * 0.5;
     let mergedSize = state.currentDotSize * 1.12;
-    circle(mergedX, state.cy, mergedSize);
+    let chaos = pow(state.mergeChaos, 1.35);
+    let shakeAmp = lerp(0.2, mergeShakeMaxOffset, chaos);
+    let shakeFreq = lerp(0.2, 1.6, chaos);
+    let jx = sin(frameCount * shakeFreq * 0.73 + state.dotSize) * shakeAmp;
+    let jy =
+      cos(frameCount * shakeFreq * 0.91 + state.dotSize * 0.37) * shakeAmp;
+    let x = mergedX + jx;
+    let y = state.cy + jy;
+
+    // Blur grows stronger while merged chaos increases.
+    noStroke();
+    for (let i = mergeShakeBlurLayers; i >= 1; i--) {
+      let t = i / mergeShakeBlurLayers;
+      let spread = mergeShakeBlurSpread * chaos * t;
+      let a = lerp(2, 22, chaos) * t;
+      fill(255, 80, 170, a);
+      circle(x, y, mergedSize + spread);
+    }
+
+    fill(mergedDotColor);
+    circle(x, y, mergedSize);
     pop();
     return;
   }
@@ -693,7 +733,9 @@ function respawnRectangles(state) {
   rebuildSortForCurrentOrder(state);
   state.merging = false;
   state.mergePauseStarted = false;
+  state.mergePauseStart = 0;
   state.mergePauseUntil = 0;
+  state.mergeChaos = 0;
   state.lastStepTime = millis();
 }
 
