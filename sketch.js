@@ -1,4 +1,4 @@
-let sortStepsPerSecond = 40; // Bubble-sort steps per second (adjust this)
+let sortStepsPerSecond = 20; // Bubble-sort steps per second (adjust this)
 let moveEase = 0.2; // Rectangle movement smoothness/speed (0.05 to 0.4)
 let sortingAlgorithm = "random"; // "random", "bubble", "selection", "insertion"
 let removeGroupSize = 2; // When N consecutive ascending IDs appear, remove them
@@ -16,9 +16,9 @@ let glowLayerAlphaMax = 8; // Blur layer max alpha
 let mergedDotColor = "#FF3FA4"; // Pink color after full merge
 let mergePauseMinMs = 900; // Minimum pause time after merge
 let mergePauseMaxMs = 2600; // Maximum pause time after merge
-let mergeShakeMaxOffset = 8; // Max shake offset while merged
+let mergeShakeMaxOffset = 4; // Max shake offset while merged
 let mergeShakeBlurLayers = 8; // Blurry halo layers for merged dot
-let mergeShakeBlurSpread = 26; // Max blur spread for merged dot
+let mergeShakeBlurSpread = 10; // Max blur spread for merged dot
 let colorModeOption = "mono"; // "palette" or "mono"
 const PALETTE = [
   "#20C4F4", // cyan
