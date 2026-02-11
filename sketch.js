@@ -31,6 +31,7 @@ const PALETTE = [
 
 let relationshipStates = {};
 let relationshipLayout = null;
+let curveSampleCount = 180;
 
 function setup() {
   createCanvas(800, 600);
@@ -58,15 +59,29 @@ function drawRelationshipBars() {
   }
 
   for (let item of relationshipLayout.items) {
+    let ay = sampleBoundaryCurve(
+      relationshipLayout.centerCurves[item.barIndex],
+      relationshipLayout.x0,
+      relationshipLayout.x1,
+      item.ax,
+    );
+    let by = sampleBoundaryCurve(
+      relationshipLayout.centerCurves[item.barIndex],
+      relationshipLayout.x0,
+      relationshipLayout.x1,
+      item.bx,
+    );
+
     createrelationship(
       item.id,
       item.ax,
-      item.ay,
+      ay,
       item.bx,
-      item.by,
+      by,
       item.rectWidth,
       item.rectHeight,
       item.numRects,
+      item,
     );
   }
 }
@@ -85,14 +100,59 @@ function buildRelationshipBarLayout() {
   let maxBarH = innerH * 0.28;
   let barHeights = randomPartition(innerH, barCount, minBarH, maxBarH);
 
-  let items = [];
-  let y = y0;
-  for (let b = 0; b < barHeights.length; b++) {
-    let barH = barHeights[b];
-    let barY0 = y;
-    let barY1 = y + barH;
-    let cy = (barY0 + barY1) * 0.5;
+  // Build non-overlapping smooth curved boundaries for bars.
+  let gapProfiles = [];
+  for (let b = 0; b < barCount; b++) {
+    gapProfiles.push({
+      base: barHeights[b],
+      a1: random(0.12, 0.33),
+      a2: random(0.05, 0.16),
+      f1: random(0.8, 1.8),
+      f2: random(1.8, 3.7),
+      p1: random(TWO_PI),
+      p2: random(TWO_PI),
+    });
+  }
 
+  let minGap = max(26, innerH * 0.04);
+  let boundaries = [];
+  for (let k = 0; k <= barCount; k++) boundaries.push([]);
+
+  for (let s = 0; s < curveSampleCount; s++) {
+    let t = s / (curveSampleCount - 1);
+    let gaps = [];
+    let totalGaps = 0;
+    for (let b = 0; b < barCount; b++) {
+      let p = gapProfiles[b];
+      let mod =
+        1 +
+        p.a1 * sin(TWO_PI * p.f1 * t + p.p1) +
+        p.a2 * sin(TWO_PI * p.f2 * t + p.p2);
+      let g = max(minGap, p.base * mod);
+      gaps.push(g);
+      totalGaps += g;
+    }
+
+    let scale = innerH / totalGaps;
+    let yCursor = y0;
+    boundaries[0][s] = yCursor;
+    for (let b = 0; b < barCount; b++) {
+      yCursor += gaps[b] * scale;
+      boundaries[b + 1][s] = yCursor;
+    }
+  }
+
+  let centerCurves = [];
+  for (let b = 0; b < barCount; b++) {
+    let curve = [];
+    for (let s = 0; s < curveSampleCount; s++) {
+      curve.push((boundaries[b][s] + boundaries[b + 1][s]) * 0.5);
+    }
+    centerCurves.push(curve);
+  }
+
+  let items = [];
+  for (let b = 0; b < barCount; b++) {
     let colCount = floor(random(2, 5));
     let minCellW = max(70, innerW * 0.09);
     let maxCellW = innerW * 0.45;
@@ -103,21 +163,24 @@ function buildRelationshipBarLayout() {
       let cellW = colWidths[c];
       let cellX0 = x;
       let cellX1 = x + cellW;
-
       let edgePad = min(18, cellW * 0.12);
       let ax = cellX0 + edgePad;
       let bx = cellX1 - edgePad;
+
       if (bx - ax > 24) {
-        let rectHeight = constrain(barH * 0.56, 14, barH * 0.86);
+        let barMidX = (ax + bx) * 0.5;
+        let topY = sampleBoundaryCurve(boundaries[b], x0, x1, barMidX);
+        let bottomY = sampleBoundaryCurve(boundaries[b + 1], x0, x1, barMidX);
+        let bandH = max(12, bottomY - topY);
+        let rectHeight = constrain(bandH * 0.56, 12, bandH * 0.9);
         let rectWidth = constrain(rectHeight * random(0.14, 0.24), 3, 14);
         let numRects = floor(random(6, 18));
 
         items.push({
           id: "bar_" + b + "_cell_" + c,
+          barIndex: b,
           ax: ax,
-          ay: cy,
           bx: bx,
-          by: cy,
           rectWidth: rectWidth,
           rectHeight: rectHeight,
           numRects: numRects,
@@ -125,12 +188,15 @@ function buildRelationshipBarLayout() {
       }
       x += cellW;
     }
-    y += barH;
   }
 
   return {
     canvasW: width,
     canvasH: height,
+    x0: x0,
+    x1: x1,
+    boundaries: boundaries,
+    centerCurves: centerCurves,
     items: items,
   };
 }
@@ -152,6 +218,15 @@ function randomPartition(total, count, minSize, maxSize) {
   return sizes;
 }
 
+function sampleBoundaryCurve(curve, x0, x1, x) {
+  let t = constrain((x - x0) / max(1e-6, x1 - x0), 0, 1);
+  let idx = t * (curve.length - 1);
+  let i0 = floor(idx);
+  let i1 = min(curve.length - 1, i0 + 1);
+  let f = idx - i0;
+  return lerp(curve[i0], curve[i1], f);
+}
+
 // Creates and animates one relationship between dot A(ax, ay) and dot B(bx, by).
 function createrelationship(
   id,
@@ -162,6 +237,7 @@ function createrelationship(
   rectWidth = 24,
   rectHeight = 100,
   numRects = 8,
+  layoutItem = null,
 ) {
   let dx = bx - ax;
   let dy = by - ay;
@@ -196,6 +272,11 @@ function createrelationship(
   state.worldX = worldX;
   state.worldY = worldY;
   state.angle = angle;
+  state.ax = ax;
+  state.ay = ay;
+  state.bx = bx;
+  state.by = by;
+  state.layoutItem = layoutItem;
 
   updateRelationship(state);
   drawRelationship(state);
@@ -277,6 +358,11 @@ function makeRelationshipState(
     worldX: 0,
     worldY: 0,
     angle: 0,
+    ax: 0,
+    ay: 0,
+    bx: 0,
+    by: 0,
+    layoutItem: null,
     leftX: leftX,
     rightX: rightX,
     targetLeftX: leftX,
@@ -319,16 +405,22 @@ function updateRelationship(state) {
   for (let rectObj of state.rects) {
     rectObj.x = lerp(rectObj.x, rectObj.targetX, moveEase);
 
-    // Dynamic size using Perlin noise.
-    // rectWidth/rectHeight stay the average values.
+    // Width noise.
     let nW = noise(rectObj.noiseSeedW, frameCount * noiseSpeedW);
     let nH = noise(rectObj.noiseSeedH, frameCount * noiseSpeedH);
     let ampW = max(0, noiseAmplitudeW);
     let ampH = max(0, noiseAmplitudeH);
     let widthScale = max(0.1, 1 + ampW * (nW * 2 - 1));
-    let heightScale = max(0.1, 1 + ampH * (nH * 2 - 1));
     rectObj.w = state.rectWidth * widthScale;
-    rectObj.h = state.rectHeight * heightScale;
+
+    // Height follows local curve-band thickness, then adds noise.
+    let centerLocalX = rectObj.x + state.rectWidth * 0.5;
+    let centerPoint = curvePointForLocalX(state, centerLocalX);
+    let bandH = bandHeightAtWorldX(state, centerPoint.x);
+    let baseH = max(8, bandH * 0.62);
+    let heightScale = max(0.1, 1 + ampH * (nH * 2 - 1));
+    let targetH = baseH * heightScale;
+    rectObj.h = lerp(rectObj.h, targetH, 0.22);
     noiseSum += (nW + nH) * 0.5;
   }
 
@@ -414,17 +506,14 @@ function updateRelationship(state) {
 }
 
 function drawRelationship(state) {
-  push();
-  translate(state.worldX, state.worldY);
-  rotate(state.angle);
-
   // Draw glow line first so it appears behind rectangles and dots.
   drawGlowLine(state);
   noStroke();
 
   // Dots
   if (state.rects.length === 0) {
-    let mergedX = (state.leftX + state.rightX) * 0.5;
+    let mergedLocalX = (state.leftX + state.rightX) * 0.5;
+    let mergedPoint = curvePointForLocalX(state, mergedLocalX);
     let mergedSize = state.currentDotSize * 1.12;
     let chaos = pow(state.mergeChaos, 1.35);
     let shakeAmp = lerp(0.2, mergeShakeMaxOffset, chaos);
@@ -432,8 +521,8 @@ function drawRelationship(state) {
     let jx = sin(frameCount * shakeFreq * 0.73 + state.dotSize) * shakeAmp;
     let jy =
       cos(frameCount * shakeFreq * 0.91 + state.dotSize * 0.37) * shakeAmp;
-    let x = mergedX + jx;
-    let y = state.cy + jy;
+    let x = mergedPoint.x + jx;
+    let y = mergedPoint.y + jy;
 
     // Blur grows stronger while merged chaos increases.
     noStroke();
@@ -447,29 +536,31 @@ function drawRelationship(state) {
 
     fill(mergedDotColor);
     circle(x, y, mergedSize);
-    pop();
     return;
   }
 
+  let leftPoint = curvePointForLocalX(state, state.leftX);
+  let rightPoint = curvePointForLocalX(state, state.rightX);
   fill(state.dotColorA);
-  circle(state.leftX, state.cy, state.currentDotSize);
+  circle(leftPoint.x, leftPoint.y, state.currentDotSize);
   fill(state.dotColorB);
-  circle(state.rightX, state.cy, state.currentDotSize);
+  circle(rightPoint.x, rightPoint.y, state.currentDotSize);
 
   // Rectangles
-  rectMode(CORNER);
+  rectMode(CENTER);
   let gradientTById = buildGradientTById(state.rects);
   for (let rectObj of state.rects) {
-    // Keep each dynamic rectangle centered on its slot center.
-    let slotCenterX = rectObj.x + state.rectWidth / 2;
+    let slotCenterLocalX = rectObj.x + state.rectWidth / 2;
+    let centerPoint = curvePointForLocalX(state, slotCenterLocalX);
+    let tangent = curveTangentAngleAtWorldX(state, centerPoint.x);
     let t = gradientTById[rectObj.id];
     fill(lerpColor(state.dotColorA, state.dotColorB, t));
-    let drawX = slotCenterX - rectObj.w / 2;
-    let drawY = state.cy - rectObj.h / 2;
-    rect(drawX, drawY, rectObj.w, rectObj.h);
+    push();
+    translate(centerPoint.x, centerPoint.y);
+    rotate(tangent);
+    rect(0, 0, rectObj.w, rectObj.h);
+    pop();
   }
-
-  pop();
 }
 
 function drawGlowLine(state) {
@@ -499,20 +590,22 @@ function drawGlowLine(state) {
 
 function getGlowLinePoints(state) {
   let points = [];
-  points.push({ x: state.leftX, y: state.cy });
+  points.push(curvePointForLocalX(state, state.leftX));
 
   // Follow the current middle points of rectangles, from left to right.
   let mids = [];
   for (let rectObj of state.rects) {
+    let localX = rectObj.x + state.rectWidth / 2;
+    let p = curvePointForLocalX(state, localX);
     mids.push({
-      x: rectObj.x + state.rectWidth / 2,
-      y: state.cy,
+      x: p.x,
+      y: p.y,
     });
   }
   mids.sort((a, b) => a.x - b.x);
   for (let p of mids) points.push(p);
 
-  points.push({ x: state.rightX, y: state.cy });
+  points.push(curvePointForLocalX(state, state.rightX));
   return points;
 }
 
@@ -525,6 +618,50 @@ function drawSmoothPolyline(points) {
   let last = points[points.length - 1];
   curveVertex(last.x, last.y);
   endShape();
+}
+
+function curvePointForLocalX(state, localX) {
+  let denom = state.rightX - state.leftX;
+  let t = abs(denom) < 1e-6 ? 0.5 : (localX - state.leftX) / denom;
+  t = constrain(t, 0, 1);
+
+  let x = lerp(state.ax, state.bx, t);
+  let y = lerp(state.ay, state.by, t);
+
+  if (state.layoutItem && relationshipLayout) {
+    let curve = relationshipLayout.centerCurves[state.layoutItem.barIndex];
+    y = sampleBoundaryCurve(curve, relationshipLayout.x0, relationshipLayout.x1, x);
+  }
+  return { x: x, y: y };
+}
+
+function bandHeightAtWorldX(state, x) {
+  if (!state.layoutItem || !relationshipLayout) return state.rectHeight / 0.62;
+  let bar = state.layoutItem.barIndex;
+  let top = sampleBoundaryCurve(
+    relationshipLayout.boundaries[bar],
+    relationshipLayout.x0,
+    relationshipLayout.x1,
+    x,
+  );
+  let bottom = sampleBoundaryCurve(
+    relationshipLayout.boundaries[bar + 1],
+    relationshipLayout.x0,
+    relationshipLayout.x1,
+    x,
+  );
+  return max(8, bottom - top);
+}
+
+function curveTangentAngleAtWorldX(state, x) {
+  if (!state.layoutItem || !relationshipLayout) {
+    return atan2(state.by - state.ay, state.bx - state.ax);
+  }
+  let eps = 2.0;
+  let curve = relationshipLayout.centerCurves[state.layoutItem.barIndex];
+  let yL = sampleBoundaryCurve(curve, relationshipLayout.x0, relationshipLayout.x1, x - eps);
+  let yR = sampleBoundaryCurve(curve, relationshipLayout.x0, relationshipLayout.x1, x + eps);
+  return atan2(yR - yL, 2 * eps);
 }
 
 function allRectsSettled(rects) {
