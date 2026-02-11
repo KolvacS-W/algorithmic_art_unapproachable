@@ -57,20 +57,22 @@ function setup() {
 }
 
 function draw() {
-  // Draw background based on color mode.
+  // Choose background by color mode each frame.
   background(colorModeOption === "mono" ? "black" : "#e6e6e8");
 
-  // Ensure layout exists for current canvas size.
+  // Build (or rebuild) cached curved layout if canvas changed.
   ensureLayout();
 
-  // Update and draw every relationship cell.
+  // For each cell, sample the two endpoint y-values from that bar's center curve.
   for (let item of relationshipLayout.items) {
+    // Left endpoint y on center curve.
     let ay = sampleCurveAtX(
       relationshipLayout.centerCurves[item.barIndex],
       relationshipLayout.x0,
       relationshipLayout.x1,
       item.ax,
     );
+    // Right endpoint y on center curve.
     let by = sampleCurveAtX(
       relationshipLayout.centerCurves[item.barIndex],
       relationshipLayout.x0,
@@ -78,12 +80,14 @@ function draw() {
       item.bx,
     );
 
+    // Run animation update + drawing for this one relationship.
     updateAndDrawRelationship(item, ay, by);
   }
+  // noloop();
 }
 
 function ensureLayout() {
-  // Rebuild layout when missing or canvas size changed.
+  // Rebuild layout when missing or when the canvas size changes.
   if (
     !relationshipLayout ||
     relationshipLayout.canvasW !== width ||
@@ -95,100 +99,157 @@ function ensureLayout() {
 }
 
 function buildCurvedBarLayout() {
-  // Define inner drawing box.
-  let margin = min(width, height) * 0.04; // outer padding around all bars
-  let x0 = margin; // left x of inner area
-  let x1 = width - margin; // right x of inner area
-  let y0 = margin; // top y of inner area
-  let y1 = height - margin; // bottom y of inner area
-  let innerW = x1 - x0; // usable width for all columns
-  let innerH = y1 - y0; // usable height for all bars
+  // 1) Build the inner drawing box.
+  let box = createInnerBox();
 
-  // Randomly choose number of bars and each base height.
-  let barCount = floor(random(5, 9)); // number of horizontal curved bands
-  let minBarH = max(42, innerH * 0.08); // minimum base bar height
-  let maxBarH = innerH * 0.28; // maximum base bar height
-  let barBaseHeights = randomPartition(innerH, barCount, minBarH, maxBarH); // base heights before wave modulation
+  // 2) Decide how many curved bars and their base heights.
+  let barCount = floor(random(5, 9));
+  let minBarH = max(42, box.innerH * 0.08);
+  let maxBarH = box.innerH * 0.28;
+  let barBaseHeights = randomPartition(box.innerH, barCount, minBarH, maxBarH);
 
-  // Build random modulation profile per bar so boundaries are smooth and organic.
+  // 3) Create smooth wave profiles (one profile per bar).
+  let profiles = buildBarProfiles(barBaseHeights);
+
+  // 4) Convert profiles into non-overlapping top/bottom boundary curves.
+  let minGap = max(26, box.innerH * 0.04);
+  let boundaries = buildBoundariesFromProfiles(
+    profiles,
+    box.y0,
+    box.innerH,
+    minGap,
+  );
+
+  // 5) Build center curves between each top/bottom boundary pair.
+  let centerCurves = buildCenterCurves(boundaries);
+
+  // 6) Split each curved bar into vertical cells and create relationship items.
+  let items = buildRelationshipItems(barCount, box, boundaries);
+
+  // Return all layout information.
+  return {
+    canvasW: width,
+    canvasH: height,
+    x0: box.x0,
+    x1: box.x1,
+    boundaries: boundaries,
+    centerCurves: centerCurves,
+    items: items,
+  };
+}
+
+function createInnerBox() {
+  // Outer margin around the full layout.
+  let margin = min(width, height) * 0.04;
+
+  // Inner rectangle bounds.
+  let x0 = margin;
+  let x1 = width - margin;
+  let y0 = margin;
+  let y1 = height - margin;
+
+  // Inner rectangle size.
+  let innerW = x1 - x0;
+  let innerH = y1 - y0;
+
+  return { margin, x0, x1, y0, y1, innerW, innerH };
+}
+
+function buildBarProfiles(baseHeights) {
+  // Profile fields:
+  // `base` = average band height
+  // `a1/a2` = wave amplitudes
+  // `f1/f2` = wave frequencies
+  // `p1/p2` = wave phase offsets
   let profiles = [];
-  for (let i = 0; i < barCount; i++) {
+  for (let i = 0; i < baseHeights.length; i++) {
     profiles.push({
-      base: barBaseHeights[i], // average gap/height for this band
-      a1: random(0.12, 0.33), // amplitude of first sine wave (strength of bend)
-      a2: random(0.05, 0.16), // amplitude of second sine wave (fine variation)
-      f1: random(0.8, 1.8), // frequency of first sine wave (how many bends)
-      f2: random(1.8, 3.7), // frequency of second sine wave
-      p1: random(TWO_PI), // phase offset of first sine (horizontal shift)
-      p2: random(TWO_PI), // phase offset of second sine
+      base: baseHeights[i],
+      a1: random(0.12, 0.33),
+      a2: random(0.05, 0.16),
+      f1: random(0.8, 1.8),
+      f2: random(1.8, 3.7),
+      p1: random(TWO_PI),
+      p2: random(TWO_PI),
     });
   }
+  return profiles;
+}
 
-  // Build non-overlapping boundaries by normalizing gaps at each sample x.
-  let minGap = max(26, innerH * 0.04); // safety thickness so bands never collapse
-  let boundaries = Array.from({ length: barCount + 1 }, () => []); // y-curves for top/bottom boundaries
+function buildBoundariesFromProfiles(profiles, yTop, totalHeight, minGap) {
+  // One more boundary than bars: top boundary + boundaries between bars + bottom boundary.
+  let boundaries = Array.from({ length: profiles.length + 1 }, () => []);
 
+  // For each sampled x-position, compute all band thicknesses then stack boundaries.
   for (let s = 0; s < curveSampleCount; s++) {
     let t = s / (curveSampleCount - 1); // normalized x sample in [0,1]
-    let gaps = []; // bar heights at this x sample
-    let total = 0; // sum of all gaps at this x sample
+    let localGaps = []; // thickness of each bar at this x sample
+    let localTotal = 0; // sum of all local gaps
 
-    for (let b = 0; b < barCount; b++) {
-      let p = profiles[b]; // shorthand for this band profile
-      let modulation =
+    for (let b = 0; b < profiles.length; b++) {
+      let p = profiles[b]; // current profile
+      let wave =
         1 +
         p.a1 * sin(TWO_PI * p.f1 * t + p.p1) +
         p.a2 * sin(TWO_PI * p.f2 * t + p.p2);
-      let gap = max(minGap, p.base * modulation); // final local band thickness
-      gaps.push(gap);
-      total += gap;
+      let gap = max(minGap, p.base * wave);
+      localGaps.push(gap);
+      localTotal += gap;
     }
 
-    let scale = innerH / total; // normalize so all gaps exactly fill innerH
-    let yCursor = y0; // running y while stacking boundaries top->bottom
+    // Normalize this x-column so all bars fit exactly into totalHeight.
+    let scale = totalHeight / localTotal;
+    let yCursor = yTop; // running y while stacking boundaries top -> bottom
     boundaries[0][s] = yCursor;
-    for (let b = 0; b < barCount; b++) {
-      yCursor += gaps[b] * scale;
+    for (let b = 0; b < profiles.length; b++) {
+      yCursor += localGaps[b] * scale;
       boundaries[b + 1][s] = yCursor;
     }
   }
 
-  // Build center curve for each bar.
-  let centerCurves = [];
-  for (let b = 0; b < barCount; b++) {
-    let center = []; // center line of bar b
+  return boundaries;
+}
+
+function buildCenterCurves(boundaries) {
+  // Center curve for bar b is midpoint between boundaries b and b+1.
+  let centers = [];
+  for (let b = 0; b < boundaries.length - 1; b++) {
+    let center = [];
     for (let s = 0; s < curveSampleCount; s++) {
       center.push((boundaries[b][s] + boundaries[b + 1][s]) * 0.5);
     }
-    centerCurves.push(center);
+    centers.push(center);
   }
+  return centers;
+}
 
-  // Split each bar into random vertical cells and create one relationship per cell.
+function buildRelationshipItems(barCount, box, boundaries) {
   let items = [];
+
+  // Process one curved bar at a time.
   for (let b = 0; b < barCount; b++) {
     let cols = floor(random(2, 5)); // number of vertical cells in this bar
-    let minCellW = max(70, innerW * 0.09); // min cell width
-    let maxCellW = innerW * 0.45; // max cell width
-    let colWidths = randomPartition(innerW, cols, minCellW, maxCellW); // random column widths
+    let minCellW = max(70, box.innerW * 0.09);
+    let maxCellW = box.innerW * 0.45;
+    let colWidths = randomPartition(box.innerW, cols, minCellW, maxCellW);
 
-    let x = x0; // running x while placing cells left->right
+    let x = box.x0; // running x position for left edge of each cell
     for (let c = 0; c < colWidths.length; c++) {
-      let w = colWidths[c]; // current cell width
-      let xL = x; // cell left x
-      let xR = x + w; // cell right x
+      let w = colWidths[c]; // this cell width
+      let xL = x; // left x of cell
+      let xR = x + w; // right x of cell
 
-      // Keep dots away from cell edges.
-      let edgePad = min(18, w * 0.12); // inset so endpoint dots are not on borders
-      let ax = xL + edgePad; // left dot anchor x
-      let bx = xR - edgePad; // right dot anchor x
+      // Inset dot anchors from cell edges.
+      let edgePad = min(18, w * 0.12);
+      let ax = xL + edgePad;
+      let bx = xR - edgePad;
 
-      // Skip too-small cells.
       if (bx - ax > 24) {
-        // Estimate bar thickness at cell middle for initial rectangle sizing.
-        let midX = (ax + bx) * 0.5; // sample x at center of this relationship
-        let topY = sampleCurveAtX(boundaries[b], x0, x1, midX); // top boundary y at midX
-        let botY = sampleCurveAtX(boundaries[b + 1], x0, x1, midX); // bottom boundary y at midX
-        let bandH = max(12, botY - topY); // local bar thickness at this cell
+        // Measure local band thickness at this cell center for initial rectangle sizing.
+        let midX = (ax + bx) * 0.5;
+        let topY = sampleCurveAtX(boundaries[b], box.x0, box.x1, midX);
+        let botY = sampleCurveAtX(boundaries[b + 1], box.x0, box.x1, midX);
+        let bandH = max(12, botY - topY);
 
         let rectHeight = constrain(bandH * 0.56, 12, bandH * 0.9);
         let rectWidth = constrain(rectHeight * random(0.14, 0.24), 3, 14);
@@ -204,20 +265,13 @@ function buildCurvedBarLayout() {
           numRects: numRects,
         });
       }
+
+      // Move to next cell.
       x += w;
     }
   }
 
-  // Return all layout information.
-  return {
-    canvasW: width,
-    canvasH: height,
-    x0: x0,
-    x1: x1,
-    boundaries: boundaries,
-    centerCurves: centerCurves,
-    items: items,
-  };
+  return items;
 }
 
 function randomPartition(total, count, minSize, maxSize) {
