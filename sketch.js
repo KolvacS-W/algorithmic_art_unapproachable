@@ -13,13 +13,11 @@ let removeGroupSize = 2;
 // Removal mode: "group" (run removal) or "correct_position" (index-correct removal).
 let removeMode = "correct_position";
 
-// Noise speed controls.
-let noiseSpeedW = 0.01;
-let noiseSpeedH = 0.01;
-
-// Noise amplitude controls.
-let noiseAmplitudeW = 0.01;
-let noiseAmplitudeH = 0.01;
+// Noise controls kept only as commented reference.
+// let noiseSpeedW = 0.01;
+// let noiseSpeedH = 0.01;
+// let noiseAmplitudeW = 0.01;
+// let noiseAmplitudeH = 0.01;
 
 // Dot heartbeat strength.
 let dotBeatAmount = 0.45;
@@ -31,18 +29,9 @@ let mergePauseMaxMs = 2600;
 let mergeShakeMaxOffset = 4;
 let mergePinkOnlyThreshold = 0.82;
 
-// Color mode: "mono" or "palette".
-let colorModeOption = "mono";
-
-// Palette used when colorModeOption === "palette".
-const PALETTE = [
-  "#20C4F4",
-  "#FF1D8E",
-  "#FFD11A",
-  "#00A651",
-  "#3050F8",
-  "#0F1020",
-];
+// Mono-only color setup.
+let dotColorDark = 110;
+let dotColorLight = 245;
 
 // Number of x-samples used to build smooth bar curves.
 let curveSampleCount = 180;
@@ -63,8 +52,8 @@ function setup() {
 }
 
 function draw() {
-  // Choose background by color mode each frame.
-  background(colorModeOption === "mono" ? "black" : "#e6e6e8");
+  // Mono mode background.
+  background("black");
 
   // Build (or rebuild) cached curved layout if canvas changed.
   ensureLayout();
@@ -115,42 +104,41 @@ function ensureLayout() {
 }
 
 function buildCurvedBarLayout() {
-  // 1) Build the inner drawing box.
-  let box = createInnerBox();
+  // 1) Use the full canvas as the layout box.
+  let x0 = 0;
+  let x1 = width;
+  let y0 = 0;
+  let y1 = height;
+  let spanW = x1 - x0;
+  let spanH = y1 - y0;
 
   // 2) Decide how many curved bars and their base heights.
   let barCount = floor(random(5, 9));
-  let minBarH = max(42, box.innerH * 0.08);
-  let maxBarH = box.innerH * 0.28;
-  let barBaseHeights = randomPartition(box.innerH, barCount, minBarH, maxBarH);
+  let minBarH = max(42, spanH * 0.08);
+  let maxBarH = spanH * 0.28;
+  let barBaseHeights = randomPartition(spanH, barCount, minBarH, maxBarH);
 
   // 3) Create smooth wave profiles (one profile per bar).
   let profiles = buildBarProfiles(barBaseHeights);
 
   // 4) Convert profiles into non-overlapping top/bottom boundary curves.
-  let minGap = max(26, box.innerH * 0.04);
-  let boundaries = buildBoundariesFromProfiles(
-    profiles,
-    box.y0,
-    box.innerH,
-    minGap,
-  );
+  let minGap = max(26, spanH * 0.04);
+  let boundaries = buildBoundariesFromProfiles(profiles, y0, spanH, minGap);
 
   // 5) Build center curves between each top/bottom boundary pair.
   let centerCurves = buildCenterCurves(boundaries);
 
   // 6) Split each curved bar into vertical cells and create relationship items.
-  let items = buildRelationshipItems(barCount, box, boundaries);
+  let items = buildRelationshipItems(barCount, x0, x1, spanW, boundaries);
 
   // Return all layout information.
   return {
     canvasW: width,
     canvasH: height,
-    box: box,
-    x0: box.x0,
-    x1: box.x1,
-    y0: box.y0,
-    y1: box.y1,
+    x0: x0,
+    x1: x1,
+    y0: y0,
+    y1: y1,
     boundaries: boundaries,
     centerCurves: centerCurves,
     items: items,
@@ -164,12 +152,12 @@ function drawDebugLayout(layout) {
   textSize(10);
   textAlign(LEFT, TOP);
 
-  // 1) Inner drawing box used by the layout generator.
+  // 1) Full canvas layout bounds.
   noFill();
   stroke(255, 140, 0);
   strokeWeight(1.2);
   rectMode(CORNERS);
-  rect(layout.box.x0, layout.box.y0, layout.box.x1, layout.box.y1);
+  rect(layout.x0, layout.y0, layout.x1, layout.y1);
 
   // 2) x0/x1 and y0/y1 guide lines.
   stroke(255, 70, 70);
@@ -196,7 +184,7 @@ function drawDebugLayout(layout) {
   // 5) Labels for x0/x1/y0/y1.
   noStroke();
   fill(255, 140, 0);
-  text("inner box", layout.box.x0 + 4, layout.box.y0 + 4);
+  text("layout bounds = canvas", layout.x0 + 4, layout.y0 + 4);
   fill(255, 70, 70);
   text("x0", layout.x0 + 3, layout.y0 + 12);
   fill(70, 200, 255);
@@ -276,23 +264,6 @@ function debugColorForIndex(index, alphaValue) {
   return color(c[0], c[1], c[2], alphaValue);
 }
 
-function createInnerBox() {
-  // Outer margin around the full layout.
-  let margin = min(width, height) * 0.04;
-
-  // Inner rectangle bounds.
-  let x0 = margin;
-  let x1 = width - margin;
-  let y0 = margin;
-  let y1 = height - margin;
-
-  // Inner rectangle size.
-  let innerW = x1 - x0;
-  let innerH = y1 - y0;
-
-  return { margin, x0, x1, y0, y1, innerW, innerH };
-}
-
 function buildBarProfiles(baseHeights) {
   // Profile fields:
   // `base` = average band height
@@ -361,17 +332,17 @@ function buildCenterCurves(boundaries) {
   return centers;
 }
 
-function buildRelationshipItems(barCount, box, boundaries) {
+function buildRelationshipItems(barCount, x0, x1, spanW, boundaries) {
   let items = [];
 
   // Process one curved bar at a time.
   for (let b = 0; b < barCount; b++) {
     let cols = floor(random(2, 5)); // number of vertical cells in this bar
-    let minCellW = max(70, box.innerW * 0.09);
-    let maxCellW = box.innerW * 0.45;
-    let colWidths = randomPartition(box.innerW, cols, minCellW, maxCellW);
+    let minCellW = max(70, spanW * 0.09);
+    let maxCellW = spanW * 0.45;
+    let colWidths = randomPartition(spanW, cols, minCellW, maxCellW);
 
-    let x = box.x0; // running x position for left edge of each cell
+    let x = x0; // running x position for left edge of each cell
     for (let c = 0; c < colWidths.length; c++) {
       let w = colWidths[c]; // this cell width
       let xL = x; // left x of cell
@@ -385,8 +356,8 @@ function buildRelationshipItems(barCount, box, boundaries) {
       if (bx - ax > 24) {
         // Measure local band thickness at this cell center for initial rectangle sizing.
         let midX = (ax + bx) * 0.5;
-        let topY = sampleCurveAtX(boundaries[b], box.x0, box.x1, midX);
-        let botY = sampleCurveAtX(boundaries[b + 1], box.x0, box.x1, midX);
+        let topY = sampleCurveAtX(boundaries[b], x0, x1, midX);
+        let botY = sampleCurveAtX(boundaries[b + 1], x0, x1, midX);
         let bandH = max(12, botY - topY);
 
         let rectHeight = constrain(bandH * 0.56, 12, bandH * 0.9);
@@ -455,7 +426,6 @@ function updateAndDrawRelationship(item, ay, by) {
     sortingAlgorithm,
     removeGroupSize,
     removeMode,
-    colorModeOption,
   ].join("|");
 
   // Create relationship state when needed.
@@ -521,17 +491,9 @@ function createRelationshipState(
     slots.push(startX + i * (rectWidth + gap));
   }
 
-  // Choose dot colors from mode.
-  let dotColorA;
-  let dotColorB;
-  if (colorModeOption === "mono") {
-    dotColorA = color(110);
-    dotColorB = color(245);
-  } else {
-    let pair = palettePairForId(item.id);
-    dotColorA = color(PALETTE[pair[0]]);
-    dotColorB = color(PALETTE[pair[1]]);
-  }
+  // Mono dot colors.
+  let dotColorA = color(dotColorDark);
+  let dotColorB = color(dotColorLight);
 
   // Initialize rectangles with id and noise seeds.
   let rects = [];
@@ -542,8 +504,8 @@ function createRelationshipState(
       targetX: 0,
       w: rectWidth,
       h: rectHeight,
-      noiseSeedW: random(1000),
-      noiseSeedH: random(1000),
+      // noiseSeedW: random(1000),
+      // noiseSeedH: random(1000),
     });
   }
 
@@ -612,19 +574,20 @@ function updateRelationship(state) {
   state.leftX = lerp(state.leftX, state.targetLeftX, moveEase);
   state.rightX = lerp(state.rightX, state.targetRightX, moveEase);
 
-  // Accumulate noise metric for heartbeat.
-  let noiseSum = 0;
+  // Noise metric disabled.
+  // let noiseSum = 0;
 
   // Animate rectangle positions/sizes.
   for (let rectObj of state.rects) {
     // Move rectangle x toward its slot.
     rectObj.x = lerp(rectObj.x, rectObj.targetX, moveEase);
 
-    // Width noise.
-    let nW = noise(rectObj.noiseSeedW, frameCount * noiseSpeedW);
-    let ampW = max(0, noiseAmplitudeW);
-    let widthScale = max(0.1, 1 + ampW * (nW * 2 - 1));
-    rectObj.w = state.rectWidth * widthScale;
+    // Width noise disabled: keep base width.
+    // let nW = noise(rectObj.noiseSeedW, frameCount * noiseSpeedW);
+    // let ampW = max(0, noiseAmplitudeW);
+    // let widthScale = max(0.1, 1 + ampW * (nW * 2 - 1));
+    // rectObj.w = state.rectWidth * widthScale;
+    rectObj.w = state.rectWidth;
 
     // Height from local band thickness + noise.
     let centerLocalX = rectObj.x + state.rectWidth * 0.5;
@@ -632,16 +595,18 @@ function updateRelationship(state) {
     let bandH = bandHeightAtWorldX(state, centerPt.x);
     let baseH = max(8, bandH * 0.62);
 
-    let nH = noise(rectObj.noiseSeedH, frameCount * noiseSpeedH);
-    let ampH = max(0, noiseAmplitudeH);
-    let heightScale = max(0.1, 1 + ampH * (nH * 2 - 1));
-    rectObj.h = lerp(rectObj.h, baseH * heightScale, 0.22);
+    // Height noise disabled: follow curved band only.
+    // let nH = noise(rectObj.noiseSeedH, frameCount * noiseSpeedH);
+    // let ampH = max(0, noiseAmplitudeH);
+    // let heightScale = max(0.1, 1 + ampH * (nH * 2 - 1));
+    // rectObj.h = lerp(rectObj.h, baseH * heightScale, 0.22);
+    rectObj.h = lerp(rectObj.h, baseH, 0.22);
 
-    noiseSum += (nW + nH) * 0.5;
+    // noiseSum += (nW + nH) * 0.5;
   }
 
-  // Dot heartbeat driven by rectangle noise.
-  let avgNoise = state.rects.length > 0 ? noiseSum / state.rects.length : 0.5;
+  // Dot heartbeat uses a stable fallback since noise is disabled.
+  let avgNoise = 0.5;
   let beatSpeed = lerp(0.18, 0.34, avgNoise);
   let beatPhase = frameCount * beatSpeed + avgNoise * TWO_PI * 2.0;
   let beatShape = pow(max(0, sin(beatPhase)), 8);
@@ -1068,8 +1033,8 @@ function respawnRectangles(state) {
       targetX: 0,
       w: state.rectWidth,
       h: state.rectHeight,
-      noiseSeedW: random(1000),
-      noiseSeedH: random(1000),
+      // noiseSeedW: random(1000),
+      // noiseSeedH: random(1000),
     });
   }
 
@@ -1107,27 +1072,6 @@ function resolveSortingAlgorithm(algorithm) {
   if (algorithm !== "random") return algorithm;
   let options = ["bubble", "selection", "insertion"];
   return random(options);
-}
-
-function palettePairForId(id) {
-  // Deterministic color pair per relationship id.
-  let idx = hashStringToInt(id);
-  let pairs = [];
-  for (let a = 0; a < PALETTE.length; a++) {
-    for (let b = 0; b < PALETTE.length; b++) {
-      if (a !== b) pairs.push([a, b]);
-    }
-  }
-  return pairs[idx % pairs.length];
-}
-
-function hashStringToInt(str) {
-  // Simple unsigned 32-bit string hash.
-  let h = 0;
-  for (let i = 0; i < str.length; i++) {
-    h = (h * 31 + str.charCodeAt(i)) >>> 0;
-  }
-  return h;
 }
 
 function buildGradientTById(rects) {
