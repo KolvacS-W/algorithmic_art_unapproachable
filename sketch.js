@@ -47,6 +47,12 @@ const PALETTE = [
 // Number of x-samples used to build smooth bar curves.
 let curveSampleCount = 180;
 
+// Debug overlay switch: set true to visualize layout construction.
+let debugMode = true;
+
+// Draw every Nth curve sample as a dot in debug mode.
+let debugSampleStride = 8;
+
 // Runtime state.
 let relationshipLayout = null;
 let relationshipStates = {};
@@ -62,6 +68,11 @@ function draw() {
 
   // Build (or rebuild) cached curved layout if canvas changed.
   ensureLayout();
+
+  // Draw static debug guides first (box, boundaries, center curves).
+  if (debugMode) {
+    drawDebugLayout(relationshipLayout);
+  }
 
   // For each cell, sample the two endpoint y-values from that bar's center curve.
   for (let item of relationshipLayout.items) {
@@ -82,6 +93,11 @@ function draw() {
 
     // Run animation update + drawing for this one relationship.
     updateAndDrawRelationship(item, ay, by);
+
+    // Draw anchor/debug points for this specific relationship.
+    if (debugMode) {
+      drawDebugRelationshipAnchors(item, ay, by);
+    }
   }
   // noloop();
 }
@@ -130,12 +146,134 @@ function buildCurvedBarLayout() {
   return {
     canvasW: width,
     canvasH: height,
+    box: box,
     x0: box.x0,
     x1: box.x1,
+    y0: box.y0,
+    y1: box.y1,
     boundaries: boundaries,
     centerCurves: centerCurves,
     items: items,
   };
+}
+
+function drawDebugLayout(layout) {
+  if (!layout) return;
+
+  // Label style for all debug text.
+  textSize(10);
+  textAlign(LEFT, TOP);
+
+  // 1) Inner drawing box used by the layout generator.
+  noFill();
+  stroke(255, 140, 0);
+  strokeWeight(1.2);
+  rectMode(CORNERS);
+  rect(layout.box.x0, layout.box.y0, layout.box.x1, layout.box.y1);
+
+  // 2) x0/x1 and y0/y1 guide lines.
+  stroke(255, 70, 70);
+  line(layout.x0, layout.y0, layout.x0, layout.y1);
+  stroke(70, 200, 255);
+  line(layout.x1, layout.y0, layout.x1, layout.y1);
+  stroke(255, 220, 90);
+  line(layout.x0, layout.y0, layout.x1, layout.y0);
+  stroke(150, 255, 150);
+  line(layout.x0, layout.y1, layout.x1, layout.y1);
+
+  // 3) Top/bottom boundaries for each curved bar area.
+  for (let i = 0; i < layout.boundaries.length; i++) {
+    let col = debugColorForIndex(i, 200);
+    drawDebugCurve(layout.boundaries[i], layout.x0, layout.x1, col, 1.0);
+  }
+
+  // 4) Center curve of each bar (where relationships are anchored).
+  for (let i = 0; i < layout.centerCurves.length; i++) {
+    let col = debugColorForIndex(i + 20, 255);
+    drawDebugCurve(layout.centerCurves[i], layout.x0, layout.x1, col, 2.0);
+  }
+
+  // 5) Labels for x0/x1/y0/y1.
+  noStroke();
+  fill(255, 140, 0);
+  text("inner box", layout.box.x0 + 4, layout.box.y0 + 4);
+  fill(255, 70, 70);
+  text("x0", layout.x0 + 3, layout.y0 + 12);
+  fill(70, 200, 255);
+  text("x1", layout.x1 + 3, layout.y0 + 12);
+  fill(255, 220, 90);
+  text("y0", layout.x0 + 16, layout.y0 + 2);
+  fill(150, 255, 150);
+  text("y1", layout.x0 + 16, layout.y1 - 12);
+}
+
+function drawDebugCurve(curve, x0, x1, col, weight) {
+  if (!curve || curve.length < 2) return;
+
+  // Draw the polyline that approximates one sampled curve.
+  noFill();
+  stroke(col);
+  strokeWeight(weight);
+  beginShape();
+  for (let s = 0; s < curve.length; s++) {
+    let t = s / (curve.length - 1);
+    let x = lerp(x0, x1, t);
+    let y = curve[s];
+    vertex(x, y);
+  }
+  endShape();
+
+  // Draw sparse sample dots to show discrete sample points.
+  noStroke();
+  fill(red(col), green(col), blue(col), 120);
+  for (let s = 0; s < curve.length; s += max(1, debugSampleStride)) {
+    let t = s / (curve.length - 1);
+    let x = lerp(x0, x1, t);
+    let y = curve[s];
+    circle(x, y, 2.5);
+  }
+}
+
+function drawDebugRelationshipAnchors(item, ay, by) {
+  // Distinct color per relationship bar.
+  let col = debugColorForIndex(item.barIndex + 50, 220);
+
+  // Show sampled anchor line segment for this relationship.
+  stroke(col);
+  strokeWeight(1.3);
+  line(item.ax, ay, item.bx, by);
+
+  // Show actual sampled anchor points.
+  noStroke();
+  fill(255, 70, 70);
+  circle(item.ax, ay, 6);
+  fill(70, 200, 255);
+  circle(item.bx, by, 6);
+
+  // Show label with coordinates and bar index near left anchor.
+  fill(255);
+  textSize(9);
+  textAlign(LEFT, BOTTOM);
+  text(
+    `b${item.barIndex}  ax:${item.ax.toFixed(1)} ay:${ay.toFixed(1)}  bx:${item.bx.toFixed(1)} by:${by.toFixed(1)}`,
+    item.ax + 5,
+    ay - 6,
+  );
+}
+
+function debugColorForIndex(index, alphaValue) {
+  // Cycle across a fixed list of high-contrast debug colors.
+  let debugColors = [
+    [255, 90, 90],
+    [90, 220, 255],
+    [255, 210, 80],
+    [150, 255, 150],
+    [255, 120, 230],
+    [130, 150, 255],
+    [255, 170, 90],
+  ];
+  let c = debugColors[index % debugColors.length];
+  return color(c[0], c[1], c[2], alphaValue);
 }
 
 function createInnerBox() {
