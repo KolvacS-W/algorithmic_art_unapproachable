@@ -148,18 +148,39 @@ function buildCurvedBarLayout() {
 function drawDebugLayout(layout) {
   if (!layout) return;
 
-  // Label style for all debug text.
+  // Label style for debug text.
   textSize(10);
   textAlign(LEFT, TOP);
 
-  // 1) Full canvas layout bounds.
+  // 1) Fill each bar region between boundary[b] and boundary[b + 1].
+  for (let b = 0; b < layout.boundaries.length - 1; b++) {
+    let col = debugColorForIndex(b + 100, 34);
+    noStroke();
+    fill(col);
+    beginShape();
+    for (let s = 0; s < curveSampleCount; s++) {
+      let t = s / (curveSampleCount - 1);
+      let x = lerp(layout.x0, layout.x1, t);
+      let yTop = layout.boundaries[b][s];
+      vertex(x, yTop);
+    }
+    for (let s = curveSampleCount - 1; s >= 0; s--) {
+      let t = s / (curveSampleCount - 1);
+      let x = lerp(layout.x0, layout.x1, t);
+      let yBottom = layout.boundaries[b + 1][s];
+      vertex(x, yBottom);
+    }
+    endShape(CLOSE);
+  }
+
+  // 2) Full canvas layout bounds.
   noFill();
   stroke(255, 140, 0);
   strokeWeight(1.2);
   rectMode(CORNERS);
   rect(layout.x0, layout.y0, layout.x1, layout.y1);
 
-  // 2) x0/x1 and y0/y1 guide lines.
+  // 3) x0/x1 and y0/y1 guide lines.
   stroke(255, 70, 70);
   line(layout.x0, layout.y0, layout.x0, layout.y1);
   stroke(70, 200, 255);
@@ -169,19 +190,19 @@ function drawDebugLayout(layout) {
   stroke(150, 255, 150);
   line(layout.x0, layout.y1, layout.x1, layout.y1);
 
-  // 3) Top/bottom boundaries for each curved bar area.
+  // 4) Top/bottom boundaries for each curved bar area.
   for (let i = 0; i < layout.boundaries.length; i++) {
     let col = debugColorForIndex(i, 200);
-    drawDebugCurve(layout.boundaries[i], layout.x0, layout.x1, col, 1.0);
+    drawDebugCurve(layout.boundaries[i], layout.x0, layout.x1, col, 1.4);
   }
 
-  // 4) Center curve of each bar (where relationships are anchored).
+  // 5) Center curve of each bar (where relationships are anchored).
   for (let i = 0; i < layout.centerCurves.length; i++) {
     let col = debugColorForIndex(i + 20, 255);
     drawDebugCurve(layout.centerCurves[i], layout.x0, layout.x1, col, 2.0);
   }
 
-  // 5) Labels for x0/x1/y0/y1.
+  // 6) Labels for x0/x1/y0/y1 and each bar index b.
   noStroke();
   fill(255, 140, 0);
   text("layout bounds = canvas", layout.x0 + 4, layout.y0 + 4);
@@ -193,6 +214,14 @@ function drawDebugLayout(layout) {
   text("y0", layout.x0 + 16, layout.y0 + 2);
   fill(150, 255, 150);
   text("y1", layout.x0 + 16, layout.y1 - 12);
+
+  // Place "b0, b1, ..." near left edge on each bar center curve.
+  textAlign(LEFT, CENTER);
+  for (let b = 0; b < layout.centerCurves.length; b++) {
+    let y = layout.centerCurves[b][0];
+    fill(debugColorForIndex(b + 20, 255));
+    text(`b${b}`, layout.x0 + 6, y);
+  }
 }
 
 function drawDebugCurve(curve, x0, x1, col, weight) {
@@ -238,15 +267,7 @@ function drawDebugRelationshipAnchors(item, ay, by) {
   fill(70, 200, 255);
   circle(item.bx, by, 6);
 
-  // Show label with coordinates and bar index near left anchor.
-  fill(255);
-  textSize(9);
-  textAlign(LEFT, BOTTOM);
-  text(
-    `b${item.barIndex}  ax:${item.ax.toFixed(1)} ay:${ay.toFixed(1)}  bx:${item.bx.toFixed(1)} by:${by.toFixed(1)}`,
-    item.ax + 5,
-    ay - 6,
-  );
+  // Coordinate text removed to keep debug view cleaner.
 }
 
 function debugColorForIndex(index, alphaValue) {
