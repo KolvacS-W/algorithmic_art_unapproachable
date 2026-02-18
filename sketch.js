@@ -301,7 +301,7 @@ function buildBarProfiles(baseHeights) {
 }
 
 function buildBoundariesFromProfiles(profiles, yTop, totalHeight, minGap) {
-  // One more boundary than bars: top boundary + boundaries between bars + bottom boundary.
+  // If there are N bars (strip areas), we need N+1 boundary curves (edge lines):
   let boundaries = Array.from({ length: profiles.length + 1 }, () => []);
 
   // For each sampled x-position, compute all band thicknesses then stack boundaries.
@@ -428,6 +428,9 @@ function sampleCurveAtX(curve, x0, x1, x) {
 }
 
 function updateAndDrawRelationship(item, ay, by) {
+  // `item` = static layout info for one relationship cell.
+  // `ay/by` = dynamic y anchors sampled from this bar's center curve this frame.
+
   // Compute relationship axis info.
   let w = dist(item.ax, ay, item.bx, by);
 
@@ -474,6 +477,9 @@ function createRelationshipState(
   rectHeight,
   numRects,
 ) {
+  // This function builds the persistent animation state object for ONE relationship.
+  // It runs only when the relationship is first seen (or when key settings change).
+
   // Dot size scales with base rectangle height.
   let dotSize = max(8, rectHeight * 0.48);
 
@@ -578,6 +584,8 @@ function createRelationshipState(
 }
 
 function updateRelationship(state) {
+  // Main per-frame update pipeline for one relationship.
+  // 1) update targets, 2) animate geometry, 3) merge flow or sort flow.
   updateRectTargets(state);
   animateDots(state);
   animateRectangles(state);
@@ -592,7 +600,24 @@ function updateRelationship(state) {
   updateSortCycle(state);
 }
 
+function drawRelationship(state) {
+  // Main draw router for one relationship.
+  // Draw merged visual OR normal dots+rectangles visual.
+  noStroke();
+
+  // Draw merged phase.
+  if (state.rects.length === 0) {
+    drawMergedDots(state);
+    return;
+  }
+
+  drawEndpointDots(state);
+  drawRectangles(state);
+}
+
 function updateRectTargets(state) {
+  // Keep each rectangle target aligned with the current slot list.
+  // Slots change after removals, so this must be refreshed every frame.
   // Keep rectangle targets synced to current slot list.
   for (let i = 0; i < state.rects.length; i++) {
     state.rects[i].targetX = state.slots[i];
@@ -600,12 +625,18 @@ function updateRectTargets(state) {
 }
 
 function animateDots(state) {
+  // Ease the two dots toward their current target separation.
+  // Dot targets change after removals and during merge.
   // Ease dot positions toward current relationship span targets.
   state.leftX = lerp(state.leftX, state.targetLeftX, moveEase);
   state.rightX = lerp(state.rightX, state.targetRightX, moveEase);
 }
 
 function animateRectangles(state) {
+  // Animate each rectangle:
+  // - x follows sort/removal slot target
+  // - width is fixed base width
+  // - height fits local curved bar thickness at its current x
   // Animate rectangle x and keep width fixed; fit height to local band thickness.
   for (let rectObj of state.rects) {
     rectObj.x = lerp(rectObj.x, rectObj.targetX, moveEase);
@@ -624,6 +655,8 @@ function animateRectangles(state) {
 }
 
 function animateDotHeartbeat(state) {
+  // Heartbeat pulse for dots, driven by a periodic function.
+  // (Noise input is currently fixed at 0.5 because rectangle noise is disabled.)
   // Same heartbeat math as before, with fixed noise proxy.
   let avgNoise = 0.5;
   let beatSpeed = lerp(0.18, 0.34, avgNoise);
@@ -634,6 +667,9 @@ function animateDotHeartbeat(state) {
 }
 
 function updateSortCycle(state) {
+  // Sort/remove lifecycle (only when not in merged phase):
+  // A) wait for motion settle, B) remove correct-position rectangles,
+  // C) execute one timed swap step.
   // Wait for motion to settle before removal/sort operations.
   if (!allSettled(state)) return;
 
@@ -659,6 +695,8 @@ function updateSortCycle(state) {
 }
 
 function applyNextSwap(state) {
+  // Consume exactly one swap pair from precomputed plan.
+  // This creates the step-by-step visible sorting animation.
   // Execute one swap from the precomputed sort plan.
   let pair = state.swapPlan[state.swapIndex];
   let a = pair[0];
@@ -670,6 +708,9 @@ function applyNextSwap(state) {
 }
 
 function updateMergePhase(state) {
+  // Merge lifecycle after all rectangles disappear:
+  // 1) dots move together, 2) merged pause with growing chaos,
+  // 3) respawn rectangles and split apart again.
   // Initialize merge phase once.
   if (!state.merging) {
     state.merging = true;
@@ -710,20 +751,8 @@ function updateMergePhase(state) {
   }
 }
 
-function drawRelationship(state) {
-  noStroke();
-
-  // Draw merged phase.
-  if (state.rects.length === 0) {
-    drawMergedDots(state);
-    return;
-  }
-
-  drawEndpointDots(state);
-  drawRectangles(state);
-}
-
 function drawEndpointDots(state) {
+  // Convert local dot positions to world curve positions, then draw two dots.
   // Draw the two relationship dots at current curved positions.
   let leftPt = curvePointForLocalX(state, state.leftX);
   let rightPt = curvePointForLocalX(state, state.rightX);
@@ -734,6 +763,8 @@ function drawEndpointDots(state) {
 }
 
 function drawRectangles(state) {
+  // Draw rectangles at curve-following centers.
+  // Color is gradient by ID rank among remaining rectangles.
   // Draw all rectangles with ID-based gradient.
   rectMode(CENTER);
   let gradientById = buildGradientTById(state.rects);
@@ -747,6 +778,9 @@ function drawRectangles(state) {
 }
 
 function drawMergedDots(state) {
+  // Visual transition for merge:
+  // - while still apart: draw two original dots
+  // - once close enough: draw one pink shaking merged dot
   // Compute points for merge animation.
   let leftPt = curvePointForLocalX(state, state.leftX);
   let rightPt = curvePointForLocalX(state, state.rightX);
@@ -783,6 +817,8 @@ function drawMergedDots(state) {
 }
 
 function curvePointForLocalX(state, localX) {
+  // Map local relationship coordinate -> world coordinate on the current bar curve.
+  // `t` is normalized progress from left dot to right dot in [0,1].
   // Map local x to normalized t based on original full span.
   let denom = state.baseRightX - state.baseLeftX; // total original local span between the two dots
   let t = abs(denom) < 1e-6 ? 0.5 : (localX - state.baseLeftX) / denom; // normalized position along span
@@ -810,6 +846,8 @@ function curvePointForLocalX(state, localX) {
 }
 
 function bandHeightAtWorldX(state, x) {
+  // Return local bar thickness at world x by sampling top and bottom boundaries.
+  // Used to adapt rectangle height to the curved bar shape.
   // Fallback if layout unavailable.
   if (
     !relationshipLayout ||
@@ -837,6 +875,8 @@ function bandHeightAtWorldX(state, x) {
 }
 
 function allRectsSettled(rects) {
+  // True only when every rectangle is close enough to its target x.
+  // Prevents sort/removal from running while movement is still visible.
   // True when all rectangle x positions are near targets.
   for (let rectObj of rects) {
     if (abs(rectObj.x - rectObj.targetX) > 0.5) return false;
@@ -845,6 +885,7 @@ function allRectsSettled(rects) {
 }
 
 function allSettled(state) {
+  // Relationship is "settled" only if both dots AND all rectangles are near targets.
   // True when dots and rectangles are all near targets.
   if (abs(state.leftX - state.targetLeftX) > 0.5) return false;
   if (abs(state.rightX - state.targetRightX) > 0.5) return false;
@@ -938,6 +979,10 @@ function tryRemoveCorrectPosition(state) {
 }
 
 function relayoutRelationship(state) {
+  // After removals, recompute:
+  // - dot target separation
+  // - rectangle slot positions
+  // so remaining elements close gaps smoothly.
   // Recompute dot target spacing and rectangle slots after removals.
   let count = state.rects.length;
   let usedWidth =
@@ -956,6 +1001,7 @@ function relayoutRelationship(state) {
 }
 
 function rebuildSortForCurrentOrder(state) {
+  // After removals, sorting plan must be rebuilt for the NEW remaining ID order.
   // Rebuild swap plan for current remaining IDs.
   state.swapPlan = buildSwapPlan(
     state.rects.map((r) => r.id),
@@ -966,6 +1012,9 @@ function rebuildSortForCurrentOrder(state) {
 }
 
 function respawnRectangles(state) {
+  // Start a new lifecycle:
+  // recreate full rectangle set, shuffle, rebuild slots/sort,
+  // clear merge flags so dots split out again.
   // Respawn original count with fresh shuffle.
   let count = state.baseCount;
   let rects = [];
