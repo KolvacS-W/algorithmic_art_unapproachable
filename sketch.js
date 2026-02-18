@@ -586,84 +586,88 @@ function createRelationshipState(
 }
 
 function updateRelationship(state) {
-  // Update rectangle target x positions from current slots.
+  updateRectTargets(state);
+  animateDots(state);
+  animateRectangles(state);
+  animateDotHeartbeat(state);
+
+  // When no rectangles remain, run the merge/pause/respawn cycle only.
+  if (state.rects.length === 0) {
+    updateMergePhase(state);
+    return;
+  }
+
+  updateSortCycle(state);
+}
+
+function updateRectTargets(state) {
+  // Keep rectangle targets synced to current slot list.
   for (let i = 0; i < state.rects.length; i++) {
     state.rects[i].targetX = state.slots[i];
   }
+}
 
-  // Animate dot spacing toward targets.
+function animateDots(state) {
+  // Ease dot positions toward current relationship span targets.
   state.leftX = lerp(state.leftX, state.targetLeftX, moveEase);
   state.rightX = lerp(state.rightX, state.targetRightX, moveEase);
+}
 
-  // Noise metric disabled.
-  // let noiseSum = 0;
-
-  // Animate rectangle positions/sizes.
+function animateRectangles(state) {
+  // Animate rectangle x and keep width fixed; fit height to local band thickness.
   for (let rectObj of state.rects) {
-    // Move rectangle x toward its slot.
     rectObj.x = lerp(rectObj.x, rectObj.targetX, moveEase);
-
-    // Width noise disabled: keep base width.
-    // let nW = noise(rectObj.noiseSeedW, frameCount * noiseSpeedW);
-    // let ampW = max(0, noiseAmplitudeW);
-    // let widthScale = max(0.1, 1 + ampW * (nW * 2 - 1));
-    // rectObj.w = state.rectWidth * widthScale;
     rectObj.w = state.rectWidth;
 
-    // Height from local band thickness + noise.
     let centerLocalX = rectObj.x + state.rectWidth * 0.5;
     let centerPt = curvePointForLocalX(state, centerLocalX);
     let bandH = bandHeightAtWorldX(state, centerPt.x);
     let baseH = max(8, bandH * 0.62);
-
-    // Height noise disabled: follow curved band only.
-    // let nH = noise(rectObj.noiseSeedH, frameCount * noiseSpeedH);
-    // let ampH = max(0, noiseAmplitudeH);
-    // let heightScale = max(0.1, 1 + ampH * (nH * 2 - 1));
-    // rectObj.h = lerp(rectObj.h, baseH * heightScale, 0.22);
     rectObj.h = lerp(rectObj.h, baseH, 0.22);
 
-    // noiseSum += (nW + nH) * 0.5;
+    // Rectangle noise is intentionally disabled for now:
+    // let nW = noise(rectObj.noiseSeedW, frameCount * noiseSpeedW);
+    // let nH = noise(rectObj.noiseSeedH, frameCount * noiseSpeedH);
   }
+}
 
-  // Dot heartbeat uses a stable fallback since noise is disabled.
+function animateDotHeartbeat(state) {
+  // Same heartbeat math as before, with fixed noise proxy.
   let avgNoise = 0.5;
   let beatSpeed = lerp(0.18, 0.34, avgNoise);
   let beatPhase = frameCount * beatSpeed + avgNoise * TWO_PI * 2.0;
   let beatShape = pow(max(0, sin(beatPhase)), 8);
   let targetDotSize = state.dotSize * (1 + dotBeatAmount * beatShape);
   state.currentDotSize = lerp(state.currentDotSize, targetDotSize, 0.25);
+}
 
-  // Handle merge/pause/respawn phase when no rectangles remain.
-  if (state.rects.length === 0) {
-    updateMergePhase(state);
-    return;
-  }
-
-  // Sort only when all moving elements have settled.
+function updateSortCycle(state) {
+  // Wait for motion to settle before removal/sort operations.
   if (!allSettled(state)) return;
 
-  // Try rectangle removal according to current mode.
+  // Removal happens before sorting.
   if (tryRemoveRectangles(state)) {
     state.lastStepTime = millis();
     return;
   }
 
-  // Stop if current set already sorted and no more swaps.
+  // Stop if no more sort work.
   if (state.done) return;
 
-  // Apply sort step at configured cadence.
   let stepDelayMs = 1000 / max(0.1, sortStepsPerSecond);
   if (millis() - state.lastStepTime < stepDelayMs) return;
   state.lastStepTime = millis();
 
-  // Finish when swap plan consumed.
   if (state.swapIndex >= state.swapPlan.length) {
     state.done = true;
     return;
   }
 
-  // Execute one swap.
+  applyNextSwap(state);
+}
+
+function applyNextSwap(state) {
+  // Execute one swap from the precomputed sort plan.
   let pair = state.swapPlan[state.swapIndex];
   let a = pair[0];
   let b = pair[1];
@@ -723,15 +727,22 @@ function drawRelationship(state) {
     return;
   }
 
-  // Draw two endpoint dots.
+  drawEndpointDots(state);
+  drawRectangles(state);
+}
+
+function drawEndpointDots(state) {
+  // Draw the two relationship dots at current curved positions.
   let leftPt = curvePointForLocalX(state, state.leftX);
   let rightPt = curvePointForLocalX(state, state.rightX);
   fill(state.dotColorA);
   circle(leftPt.x, leftPt.y, state.currentDotSize);
   fill(state.dotColorB);
   circle(rightPt.x, rightPt.y, state.currentDotSize);
+}
 
-  // Draw rectangles.
+function drawRectangles(state) {
+  // Draw all rectangles with ID-based gradient.
   rectMode(CENTER);
   let gradientById = buildGradientTById(state.rects);
   for (let rectObj of state.rects) {
