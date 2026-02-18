@@ -7,12 +7,6 @@ let moveEase = 0.1;
 // Sorting algorithm: "random", "bubble", "selection", "insertion".
 let sortingAlgorithm = "random";
 
-// Group size used by "group" removal mode.
-let removeGroupSize = 2;
-
-// Removal mode: "group" (run removal) or "correct_position" (index-correct removal).
-let removeMode = "correct_position";
-
 // Noise controls kept only as commented reference.
 // let noiseSpeedW = 0.01;
 // let noiseSpeedH = 0.01;
@@ -37,7 +31,7 @@ let dotColorLight = 245;
 let curveSampleCount = 180;
 
 // Debug overlay switch: set true to visualize layout construction.
-let debugMode = true;
+let debugMode = false;
 
 // Draw every Nth curve sample as a dot in debug mode.
 let debugSampleStride = 8;
@@ -445,8 +439,6 @@ function updateAndDrawRelationship(item, ay, by) {
     item.rectHeight,
     item.numRects,
     sortingAlgorithm,
-    removeGroupSize,
-    removeMode,
   ].join("|");
 
   // Create relationship state when needed.
@@ -646,7 +638,7 @@ function updateSortCycle(state) {
   if (!allSettled(state)) return;
 
   // Removal happens before sorting.
-  if (tryRemoveRectangles(state)) {
+  if (tryRemoveCorrectPosition(state)) {
     state.lastStepTime = millis();
     return;
   }
@@ -918,41 +910,6 @@ function buildSwapPlan(ids, algorithm) {
   return swaps;
 }
 
-function tryRemoveRectangles(state) {
-  // Dispatch removal strategy.
-  if (removeMode === "correct_position") return tryRemoveCorrectPosition(state);
-  return tryRemoveAscendingGroup(state);
-}
-
-function tryRemoveAscendingGroup(state) {
-  // Remove runs of N ascending consecutive remaining IDs.
-  let n = max(1, floor(removeGroupSize));
-  if (state.rects.length === 0) return false;
-
-  let removed = false;
-
-  // For less than N, remove all when ordered.
-  if (state.rects.length < n) {
-    if (isAscendingConsecutive(state.rects)) {
-      state.rects.splice(0, state.rects.length);
-      removed = true;
-    }
-  } else {
-    // Repeatedly remove first matching run until none left.
-    let start = findAscendingRunStart(state.rects, n);
-    while (start >= 0) {
-      state.rects.splice(start, n);
-      removed = true;
-      start = findAscendingRunStart(state.rects, n);
-    }
-  }
-
-  if (!removed) return false;
-  relayoutRelationship(state);
-  rebuildSortForCurrentOrder(state);
-  return true;
-}
-
 function tryRemoveCorrectPosition(state) {
   // Remove any rectangle already at its correct index among remaining IDs.
   if (state.rects.length === 0) return false;
@@ -978,51 +935,6 @@ function tryRemoveCorrectPosition(state) {
   relayoutRelationship(state);
   rebuildSortForCurrentOrder(state);
   return true;
-}
-
-function findAscendingRunStart(rects, n) {
-  // Find first index where length-n run follows remaining-id adjacency.
-  let nextMap = buildNextRemainingIdMap(rects);
-
-  for (let i = 0; i <= rects.length - n; i++) {
-    let ok = true;
-    for (let k = 1; k < n; k++) {
-      let prevId = rects[i + k - 1].id;
-      let currId = rects[i + k].id;
-      if (nextMap[prevId] !== currId) {
-        ok = false;
-        break;
-      }
-    }
-    if (ok) return i;
-  }
-
-  return -1;
-}
-
-function isAscendingConsecutive(rects) {
-  // Check if all remaining rectangles are in ascending remaining-id order.
-  if (rects.length <= 1) return rects.length === 1;
-
-  let nextMap = buildNextRemainingIdMap(rects);
-  for (let i = 1; i < rects.length; i++) {
-    if (nextMap[rects[i - 1].id] !== rects[i].id) return false;
-  }
-  return true;
-}
-
-function buildNextRemainingIdMap(rects) {
-  // Build map id -> next higher remaining id.
-  let ids = rects
-    .map((r) => r.id)
-    .slice()
-    .sort((a, b) => a - b);
-
-  let map = {};
-  for (let i = 0; i < ids.length - 1; i++) {
-    map[ids[i]] = ids[i + 1];
-  }
-  return map;
 }
 
 function relayoutRelationship(state) {
